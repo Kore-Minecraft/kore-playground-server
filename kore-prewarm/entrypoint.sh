@@ -5,7 +5,7 @@
 # beats a parallel one when the container only ever holds one core. -Xss matters, the compiler recurses deep.
 set -eu
 
-APP=/kotlin-compiler-server
+APP="${APP:-/kotlin-compiler-server}"
 
 AOT=""
 [ -f "$APP/app.aot" ] && AOT="-XX:AOTCache=$APP/app.aot"

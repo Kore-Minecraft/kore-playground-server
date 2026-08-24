@@ -46,10 +46,7 @@ COPY --from=build /kotlin-compiler-server/${KOTLIN_LIB} /kotlin-compiler-server/
 COPY --from=build /kotlin-compiler-server/${KOTLIN_LIB_JS} /kotlin-compiler-server/${KOTLIN_LIB_JS}
 COPY kore-prewarm /kore-prewarm
 
-# One frozen classpath string, shared by the AOT record, create and run steps - they must match exactly.
-RUN printf -- '-cp /kotlin-compiler-server/app.jar:%s\n' \
-        "$(find /kotlin-compiler-server/lib -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')" \
-        > /kotlin-compiler-server/jvm.args
+RUN /kore-prewarm/classpath.sh
 
 ENV KORE_JS_CACHE_DIRECTORY=/kotlin-compiler-server/ir-cache
 

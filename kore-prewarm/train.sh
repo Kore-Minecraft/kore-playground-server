@@ -9,7 +9,7 @@
 # cold start, and entrypoint.sh only passes -XX:AOTCache when the file is actually there.
 set -eu
 
-APP=/kotlin-compiler-server
+APP="${APP:-/kotlin-compiler-server}"
 ARGS="@$APP/jvm.args"
 
 cd "$APP"
@@ -19,7 +19,7 @@ java -XX:AOTMode=record -XX:AOTConfiguration="$APP/app.aotconf" \
 	-Xss16m -Dserver.port=8080 $ARGS com.compiler.server.CompilerApplicationKt &
 pid=$!
 
-if /kore-prewarm/prewarm.sh; then
+if PREWARM_SERVER_PID=$pid /kore-prewarm/prewarm.sh; then
 	prewarmed=0
 else
 	prewarmed=$?

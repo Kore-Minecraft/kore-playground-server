@@ -13,6 +13,12 @@ BOOT_TIMEOUT="${PREWARM_BOOT_TIMEOUT:-300}"
 
 waited=0
 until curl -sf "$HOST/versions" >/dev/null 2>&1; do
+	# A crashed server must not cost the whole boot timeout before the build says why.
+	if [ -n "${PREWARM_SERVER_PID:-}" ] && ! kill -0 "$PREWARM_SERVER_PID" 2>/dev/null; then
+		echo "prewarm: server exited during startup, see the stack trace above" >&2
+		exit 1
+	fi
+
 	waited=$((waited + 2))
 	if [ "$waited" -ge "$BOOT_TIMEOUT" ]; then
 		echo "prewarm: server did not answer /versions within ${BOOT_TIMEOUT}s" >&2
