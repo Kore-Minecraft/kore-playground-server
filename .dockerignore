@@ -3,8 +3,10 @@
 .gradle
 .idea
 build
-*/build
-*/*/build
+# The image consumes the boot jar the host build produced, see Dockerfile.
+!build/libs
 logs
 out
 kotlin-js-store
+*/build
+*/*/build

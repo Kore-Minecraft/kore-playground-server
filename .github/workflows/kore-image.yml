@@ -1,7 +1,12 @@
 # Builds the Kore playground compile backend and pushes it to GHCR.
 #
-# The build is far too heavy for the deployment box (several GB of RAM, and the prewarm run compiles every
-# snippet), so it happens here and Dokploy only ever pulls.
+# The build is far too heavy for the deployment box (Gradle wants several GB of RAM, and the training run
+# compiles every prewarm snippet), so it happens here and Dokploy only ever pulls.
+#
+# Three caches carry between runs, in the order they pay off:
+#   - the Gradle user home and build cache, through setup-gradle;
+#   - the trained Kotlin/JS IR cache, pulled back out of the image and seeded into the next build;
+#   - the Docker layers, through the GitHub Actions cache backend.
 name: Kore playground image
 
 on:
@@ -24,19 +29,40 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Resolve the Kotlin version
-        id: kotlin
+      - name: Resolve the Kotlin and Kore versions
+        id: versions
         run: |
-          version=$(awk '{ if ($1 == "kotlin") { gsub(/"/, "", $2); print $2; } }' FS=' = ' ./gradle/libs.versions.toml)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          kotlin=$(awk '{ if ($1 == "kotlin") { gsub(/"/, "", $2); print $2; } }' FS=' = ' ./gradle/libs.versions.toml)
+          kore=$(grep -o 'io.github.ayfri.kore:kore:[^"]*' dependencies/build.gradle.kts | head -1 | cut -d: -f3)
+          echo "kotlin=$kotlin" >> "$GITHUB_OUTPUT"
+          echo "kore=$kore" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve the Kore version
-        id: kore
-        run: |
-          version=$(grep -o 'io.github.ayfri.kore:kore:[^"]*' dependencies/build.gradle.kts | head -1 | cut -d: -f3)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Outside Docker on purpose: a layer cannot keep the Gradle caches between runs, and re-resolving
+      # them is most of a cold build. Slim mode drops the Compose/wasm playground this backend never serves.
+      - name: Build the server
+        run: ./gradlew :bootJar -Pkore.slim=true --build-cache
+
+      # The training run only pays for the Kore lowerings nobody has reached yet when it starts from the
+      # previous build's cache. Rolling key: every run saves, and a version bump starts a fresh lineage.
+      - name: Restore the trained IR cache
+        uses: actions/cache@v4
+        with:
+          path: ir-cache-seed
+          key: kore-ir-${{ steps.versions.outputs.kotlin }}-${{ steps.versions.outputs.kore }}-${{ hashFiles('kore-prewarm/**', 'src/main/kotlin/com/compiler/server/kore/**') }}-${{ github.sha }}
+          restore-keys: |
+            kore-ir-${{ steps.versions.outputs.kotlin }}-${{ steps.versions.outputs.kore }}-${{ hashFiles('kore-prewarm/**', 'src/main/kotlin/com/compiler/server/kore/**') }}-
+
+      - name: Make sure the seed directory exists
+        run: mkdir -p ir-cache-seed
 
       - uses: docker/setup-buildx-action@v3
 
@@ -46,18 +72,64 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      # Loaded rather than pushed, so the smoke test runs against the exact image before anyone gets it.
+      - name: Build the image
+        uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          load: true
+          provenance: false
           build-args: |
-            KOTLIN_VERSION=${{ steps.kotlin.outputs.version }}
+            KOTLIN_VERSION=${{ steps.versions.outputs.kotlin }}
           tags: |
             ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:kore-${{ steps.kore.outputs.version }}
+            ${{ env.IMAGE }}:kore-${{ steps.versions.outputs.kore }}
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # What this proves: the prewarmed IR cache and the AOT cache shipped and are applied, and a snippet no
+      # prewarm snippet resembles compiles in seconds rather than in the two minutes an empty cache costs.
+      # Only the compile is timed - booting Spring on a single core is not what is under test.
+      - name: Smoke test the image
+        run: |
+          set -euo pipefail
+
+          docker run -d --name smoke --cpus 1.0 --memory 1500m -p 8080:8080 -e KORE_JS_CACHE_DIRECTORY=/kotlin-compiler-server/ir-cache "$IMAGE:$GITHUB_SHA"
+
+          docker exec smoke test -f /kotlin-compiler-server/app.aot || { echo "smoke: the AOT cache is missing from the image" >&2; exit 1; }
+          docker exec smoke sh -c "tr '\0' '\n' < /proc/1/cmdline | grep -q AOTCache" || { echo "smoke: the JVM started without the AOT cache" >&2; exit 1; }
+          test -n "$(docker exec smoke sh -c 'ls -A /kotlin-compiler-server/ir-cache')" || { echo "smoke: the IR cache shipped empty" >&2; exit 1; }
+
+          PREWARM_SNIPPETS=kore-prewarm/smoke PREWARM_HARNESS=kore-prewarm/harness.kt ./kore-prewarm/prewarm.sh | tee smoke.log || { docker logs smoke; exit 1; }
+
+          elapsed=$(sed -n 's/^prewarm: .* - \([0-9][0-9]*\)s, .*$/\1/p' smoke.log | head -1)
+          test -n "$elapsed" || { echo "smoke: no compile time in the output" >&2; exit 1; }
+
+          echo "smoke: the unseen snippet compiled in ${elapsed}s"
+          # An empty cache costs ~104 s and a warm one ~15 s, so this separates the two without being flaky.
+          test "$elapsed" -lt 45 || { echo "smoke: the prewarmed cache did not ship, or it is stale" >&2; exit 1; }
+
+      - name: Stop the smoke container
+        if: always()
+        run: docker rm -f smoke || true
+
+      # Instant: every layer is already in the local builder, only the cache directory leaves the image.
+      - name: Export the trained IR cache for the next run
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ir-cache-export
+          build-args: |
+            KOTLIN_VERSION=${{ steps.versions.outputs.kotlin }}
+          outputs: type=local,dest=ir-cache-seed
+          cache-from: type=gha
+
+      - name: Push the image
+        run: |
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:kore-${{ steps.versions.outputs.kore }}"
+          docker push "$IMAGE:$GITHUB_SHA"
 
       # Dokploy only pulls; building on the deployment box would take several GB of RAM and the whole CPU.
       - name: Tell Dokploy to pull the new image

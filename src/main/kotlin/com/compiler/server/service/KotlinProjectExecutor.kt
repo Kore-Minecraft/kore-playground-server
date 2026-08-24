@@ -4,6 +4,7 @@ import com.compiler.server.common.components.KotlinEnvironment
 import com.compiler.server.compiler.components.*
 import com.compiler.server.compiler.components.JsTranslationOutput
 import com.compiler.server.compiler.components.WasmTranslationSuccessfulOutput
+import com.compiler.server.kore.CompileBusyException
 import com.compiler.server.kore.CompileGate
 import com.compiler.server.model.*
 import com.compiler.server.model.JsCompilerArguments
@@ -68,7 +69,11 @@ class KotlinProjectExecutor(
 
     fun highlight(project: Project): CompilerDiagnostics = try {
         when (project.confType) {
-            ProjectType.JAVA, ProjectType.JUNIT -> compileToJvm(project).compilerDiagnostics
+            // Its own lane: a JVM pass never reaches `CompileGate`, and an editor typing at it would
+            // otherwise run unbounded next to the compile the page actually needs.
+            ProjectType.JAVA, ProjectType.JUNIT ->
+                compileGate.diagnostics { compileToJvm(project).compilerDiagnostics }
+
             ProjectType.CANVAS, ProjectType.JS, ProjectType.JS_IR ->
                 convertToJsIr(
                     project,
@@ -79,6 +84,8 @@ class KotlinProjectExecutor(
                 debugInfo = false,
             ).compilerDiagnostics
         }
+    } catch (busy: CompileBusyException) {
+        throw busy
     } catch (e: Exception) {
         log.warn("Exception in getting highlight. Project: $project", e)
         CompilerDiagnostics(emptyMap())

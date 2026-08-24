@@ -8,6 +8,10 @@ version = "${libs.versions.kotlin.get()}-SNAPSHOT"
 
 val propertyFile = "application.properties"
 
+// Kore playground: the Compose/wasm playground is dead weight for a Kotlin/JS compile backend, and building
+// it drags in skiko, binaryen, node and an npm install. Slim mode skips that whole chain. See README-KORE.md.
+val koreSlim = providers.gradleProperty("kore.slim").map(String::toBoolean).getOrElse(false)
+
 plugins {
     id("base-spring-boot-conventions")
 }
@@ -106,16 +110,20 @@ fun MapProperty<String, String>.fillProperties(
         put(name, value)
     }
 
-    val kotlinComposeWasmRuntimeHash: FileCollection = kotlinComposeWasmRuntimeHash
+    if (koreSlim) {
+        put(dependenciesComposeWasm, "kore-slim")
+    } else {
+        val kotlinComposeWasmRuntimeHash: FileCollection = kotlinComposeWasmRuntimeHash
 
-    val hashValue: Provider<String> = kotlinComposeWasmRuntimeHash.elements.map {
-        it.single().asFile.readText()
+        val hashValue: Provider<String> = kotlinComposeWasmRuntimeHash.elements.map {
+            it.single().asFile.readText()
+        }
+
+        put(
+            dependenciesComposeWasm,
+            hashValue
+        )
     }
-
-    put(
-        dependenciesComposeWasm,
-        hashValue
-    )
 
     put(
         dependenciesStaticUrl,
@@ -124,7 +132,7 @@ fun MapProperty<String, String>.fillProperties(
 }
 
 val propertiesGenerator by tasks.registering(PropertiesGenerator::class) {
-    dependsOn(kotlinComposeWasmRuntimeHash)
+    if (!koreSlim) dependsOn(kotlinComposeWasmRuntimeHash)
 
     propertiesFile.fileValue(rootDir.resolve("src/main/resources/${propertyFile}"))
 

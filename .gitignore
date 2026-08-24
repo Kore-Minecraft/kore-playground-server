@@ -41,3 +41,9 @@ out/
 .vscode/
 
 kotlin-lsp/
+
+# Kore playground: the IR cache CI seeds the image with, see .github/workflows/kore-image.yml.
+ir-cache-seed/
+
+# Kore playground: the IR cache a local server run fills, see README-KORE.md.
+ir-cache/

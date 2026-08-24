@@ -18,6 +18,7 @@ class KoreCompileSettings(
     @param:Value("\${kore.js.cache-directory:}") cacheDirectory: String,
     @param:Value("\${kore.js.max-queued-compiles:8}") val maxQueuedCompiles: Int,
     @param:Value("\${kore.js.queue-timeout-seconds:120}") val queueTimeoutSeconds: Long,
+    @param:Value("\${kore.diagnostics.max-concurrent:2}") val maxConcurrentDiagnostics: Int,
 ) {
     /** Kotlin/JS IR build cache directory, or `null` to keep the upstream single-bundle pipeline. */
     val cacheDirectory: Path? = cacheDirectory

@@ -1,31 +1,28 @@
 # Kore playground compile backend: upstream kotlin-compiler-server plus Kore's JS klibs, a prewarmed
 # Kotlin/JS IR build cache and a JDK AOT cache. See README-KORE.md.
+#
+# The Gradle build runs outside this file - docker-image-build.sh locally, the workflow in CI - because a
+# Docker layer cannot hold the Gradle dependency and build caches between runs, and re-resolving them is
+# most of a cold build. The context must therefore already carry the boot jar and the two klib folders:
+#
+#   build/libs/kotlin-compiler-server-<KOTLIN_VERSION>-SNAPSHOT.jar
+#   <KOTLIN_VERSION>/        JVM klibs
+#   <KOTLIN_VERSION>-js/     JS klibs, Kore included
+#   ir-cache-seed/           IR cache from a previous build, or empty
 
-FROM amazoncorretto:17-al2023 AS build
+FROM amazoncorretto:25-al2023 AS assemble
 
 ARG KOTLIN_VERSION
-ARG DEVELOCITY_ACCESS_KEY
 
-RUN if [ -z "$KOTLIN_VERSION" ]; then \
-        echo "Error: KOTLIN_VERSION argument is not set. Use docker-image-build.sh to build the image." >&2; \
-        exit 1; \
-    fi
+RUN test -n "$KOTLIN_VERSION" \
+	|| { echo "KOTLIN_VERSION build arg is not set, build through docker-image-build.sh" >&2; exit 1; }
 
-ENV DEVELOCITY_ACCESS_KEY=$DEVELOCITY_ACCESS_KEY
-ENV KOTLIN_LIB=$KOTLIN_VERSION
-ENV KOTLIN_LIB_JS=${KOTLIN_VERSION}-js
-
-RUN yum install -y findutils libatomic && yum clean all
-
-RUN mkdir -p /kotlin-compiler-server
-WORKDIR /kotlin-compiler-server
-ADD . /kotlin-compiler-server
-
-RUN ./gradlew build -x test
-RUN mkdir -p /build/libs && (cd /build/libs;  jar -xf /kotlin-compiler-server/build/libs/kotlin-compiler-server-${KOTLIN_LIB}-SNAPSHOT.jar)
+WORKDIR /staging
+COPY build/libs/kotlin-compiler-server-${KOTLIN_VERSION}-SNAPSHOT.jar boot.jar
+RUN jar -xf boot.jar && rm boot.jar
 
 # The AOT cache refuses a classpath containing a plain directory, so the exploded classes become a jar.
-RUN cd /build/libs/BOOT-INF/classes && jar -cf /build/app.jar .
+RUN cd BOOT-INF/classes && jar -cf /staging/app.jar . && rm -rf /staging/BOOT-INF/classes
 
 
 # Assembles the runtime layout, then trains both caches against the real server on the real endpoint.
@@ -39,18 +36,28 @@ RUN dnf install -y jq && dnf clean all
 
 WORKDIR /kotlin-compiler-server
 
-COPY --from=build /build/libs/BOOT-INF/lib /kotlin-compiler-server/lib
-COPY --from=build /build/libs/META-INF /kotlin-compiler-server/META-INF
-COPY --from=build /build/app.jar /kotlin-compiler-server/app.jar
-COPY --from=build /kotlin-compiler-server/${KOTLIN_LIB} /kotlin-compiler-server/${KOTLIN_LIB}
-COPY --from=build /kotlin-compiler-server/${KOTLIN_LIB_JS} /kotlin-compiler-server/${KOTLIN_LIB_JS}
+COPY --from=assemble /staging/BOOT-INF/lib /kotlin-compiler-server/lib
+COPY --from=assemble /staging/META-INF /kotlin-compiler-server/META-INF
+COPY --from=assemble /staging/app.jar /kotlin-compiler-server/app.jar
+COPY ${KOTLIN_VERSION} /kotlin-compiler-server/${KOTLIN_VERSION}
+COPY ${KOTLIN_VERSION}-js /kotlin-compiler-server/${KOTLIN_VERSION}-js
 COPY kore-prewarm /kore-prewarm
+
+# A cache from a previous build, so the training run pays for lowerings nobody has reached yet rather than
+# for all of them. Empty on a fresh checkout, which only makes the training run slower.
+COPY ir-cache-seed /kotlin-compiler-server/ir-cache
 
 RUN /kore-prewarm/classpath.sh
 
 ENV KORE_JS_CACHE_DIRECTORY=/kotlin-compiler-server/ir-cache
 
 RUN /kore-prewarm/train.sh
+
+
+# Carries nothing but the trained IR cache, so CI can pull it back out and seed the next build with it.
+FROM scratch AS ir-cache-export
+
+COPY --from=prewarm /kotlin-compiler-server/ir-cache /
 
 
 FROM amazoncorretto:25-al2023

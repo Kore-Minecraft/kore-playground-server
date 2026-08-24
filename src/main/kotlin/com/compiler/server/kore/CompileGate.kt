@@ -18,40 +18,62 @@ class CompileBusyException(message: String, val retryAfterSeconds: Long) : Runti
  */
 @Component
 class CompileGate(private val settings: KoreCompileSettings) {
-    private val slot = Semaphore(1, true)
-    private val queued = AtomicInteger()
+    private val compiles = Lane(permits = 1, queueLimit = settings.maxQueuedCompiles, waitSeconds = settings.queueTimeoutSeconds, what = "compile")
+
+    // A JVM diagnostics pass is ~1 s where a JS compile is 6-20 s, so several may run at once - but not
+    // unboundedly, or people typing would starve the compile the page actually needs.
+    private val diagnostics = Lane(
+        permits = settings.maxConcurrentDiagnostics,
+        queueLimit = settings.maxConcurrentDiagnostics * 4,
+        waitSeconds = DIAGNOSTICS_WAIT_SECONDS,
+        what = "diagnostics",
+    )
 
     /** Number of callers currently waiting for or holding the compile slot, for `/kore/status`. */
-    val depth get() = queued.get()
+    val depth get() = compiles.depth
 
-    fun <T> singleFlight(block: () -> T): T {
-        if (queued.incrementAndGet() > settings.maxQueuedCompiles) {
-            queued.decrementAndGet()
-            throw CompileBusyException("Compile queue is full, retry shortly.", RETRY_AFTER_FULL_SECONDS)
-        }
+    fun <T> singleFlight(block: () -> T): T = compiles.enter(block)
 
-        val acquired = try {
-            slot.tryAcquire(settings.queueTimeoutSeconds, TimeUnit.SECONDS)
-        } catch (interrupted: InterruptedException) {
-            Thread.currentThread().interrupt()
-            queued.decrementAndGet()
-            throw CompileBusyException("Interrupted while waiting for a compile slot.", RETRY_AFTER_FULL_SECONDS)
-        }
+    fun <T> diagnostics(block: () -> T): T = diagnostics.enter(block)
 
-        if (!acquired) {
-            queued.decrementAndGet()
-            throw CompileBusyException("Timed out waiting for a compile slot.", settings.queueTimeoutSeconds)
-        }
+    private class Lane(permits: Int, private val queueLimit: Int, private val waitSeconds: Long, private val what: String) {
+        private val slot = Semaphore(permits, true)
+        private val queued = AtomicInteger()
 
-        return try {
-            block()
-        } finally {
-            slot.release()
-            queued.decrementAndGet()
+        val depth get() = queued.get()
+
+        fun <T> enter(block: () -> T): T {
+            if (queued.incrementAndGet() > queueLimit) {
+                queued.decrementAndGet()
+                throw CompileBusyException("The $what queue is full, retry shortly.", RETRY_AFTER_FULL_SECONDS)
+            }
+
+            val acquired = try {
+                slot.tryAcquire(waitSeconds, TimeUnit.SECONDS)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                queued.decrementAndGet()
+                throw CompileBusyException("Interrupted while waiting for a $what slot.", RETRY_AFTER_FULL_SECONDS)
+            }
+
+            if (!acquired) {
+                queued.decrementAndGet()
+                throw CompileBusyException("Timed out waiting for a $what slot.", waitSeconds)
+            }
+
+            return try {
+                block()
+            } finally {
+                slot.release()
+                queued.decrementAndGet()
+            }
         }
     }
 
     private companion object {
         const val RETRY_AFTER_FULL_SECONDS = 10L
+
+        // A diagnostics caller is a keystroke debounce: it is worth dropping rather than queueing for long.
+        const val DIAGNOSTICS_WAIT_SECONDS = 10L
     }
 }

@@ -11,12 +11,15 @@ maintain and no runaway process to kill: the only server-side cost is bounded co
 | Change | Where |
 |---|---|
 | Kore, oop and helpers JS klibs on the compile classpath (transitives come along) | `dependencies/build.gradle.kts` |
+| The same three as JVM jars, so `/api/compiler/highlight` resolves Kore | `dependencies/build.gradle.kts` |
 | `mavenLocal()` first, so a locally published Kore build wins over the Central release | `build-settings-logic/.../kotlin-compiler-server-version-catalog.settings.gradle.kts` |
 | Kotlin/JS IR build cache and per-module output, behind one property | `kore/KoreCompileSettings.kt` |
 | Every emitted chunk returned in dependency order as `jsFiles` | `KotlinToJSTranslator.kt`, `ExecutionResult.kt` |
 | One compile at a time with a bounded queue, 429 past it | `kore/CompileGate.kt`, `KotlinProjectExecutor.kt` |
 | Prewarmed IR cache and JDK AOT cache built into the image | `Dockerfile`, `kore-prewarm/` |
-| Upstream CI replaced by a single image build | `.github/workflows/kore-image.yml` |
+| Slim mode, dropping the Compose/wasm playground from the build | `build.gradle.kts`, `dependencies/build.gradle.kts` |
+| The JS klib folder synced rather than copied, so an old Kore klib cannot linger on the classpath | `dependencies/build.gradle.kts` |
+| Upstream CI replaced by a single image build, a smoke test and three caches | `.github/workflows/kore-image.yml` |
 
 Everything else is upstream, and upstream's own JS pipeline is untouched when the cache is off.
 
@@ -26,15 +29,15 @@ Everything else is upstream, and upstream's own JS pipeline is untouched when th
 accepted and then ignored. Fast compiles therefore cost payload, and that trade is the whole point:
 
 Measured end to end through this server (`POST /api/compiler/translate/js`, Kotlin 2.4.20-RC, Kore
-2.8.0-26.1.2, warm JVM), which is what a visitor actually waits for:
+2.13.1-26.2, warm JVM, 12-core desktop), which is what a visitor actually waits for:
 
 | Request | time | output |
 |---|---|---|
-| empty cache | 104 s | 12 chunks, 16.9 MB |
-| second request, cache still settling | 49 s | 12 chunks |
-| **repeat of a snippet the cache has seen** | **7.1 s** | 12 chunks |
-| **unseen snippet against a warm cache** | **14.6 s** | 12 chunks |
-| that snippet repeated | 8.4 s | 12 chunks |
+| empty cache | 71 s | 12 chunks, 17.5 MB |
+| second request, cache still settling | 27 s | 12 chunks |
+| third, and the cache has settled | 16 s | 12 chunks |
+| **unseen snippet against a warm cache** | **12 s** | 12 chunks |
+| **repeat of a snippet the cache has seen** | **10 s** | 12 chunks |
 
 For comparison, upstream's `-Xir-dce` default takes ~41 s every time and returns a single 3.1 MB
 (0.35 MB gzipped) bundle.
@@ -70,6 +73,24 @@ rather than a shared volume.
 dependency order, so a client evaluates them top to bottom - no bundler, no module system. `jsCode` still
 carries the entry chunk in both modes; under per-module output it needs the rest loaded first.
 
+## Diagnostics without a compile
+
+`POST /api/compiler/highlight` with `confType: "java"` compiles the snippet for the JVM and returns only
+diagnostics, in the same 0-based `{ line, ch }` intervals as the compile endpoint. The `koreJvmDependency`
+configuration puts the Kore jars in `libraries.folder.jvm`, so Kore resolves there too:
+
+```sh
+curl -s -X POST localhost:8090/api/compiler/highlight -H 'Content-Type: application/json' -d '{"confType":"java","files":[{"name":"main.kt","text":"fun playground() = ..."}]}'
+```
+
+That answers in **0.3-1.2 s** against 6-20 s for the JS path, which is what makes as-you-type squiggles
+possible in the editor. Two caveats:
+
+- It is **not** behind `CompileGate`: `highlight` calls `compileToJvm` directly, so concurrent requests all
+  run. On a one-core container that competes with a real compile, and it wants its own semaphore.
+- JVM and JS can disagree - a JVM-only API passes here and fails the real compile - so a clean highlight is
+  not a promise that Run will work.
+
 ## Configuration
 
 | Property | Environment | Default | Meaning |
@@ -93,13 +114,61 @@ Locally:
 ./docker-image-build.sh
 ```
 
-The build has three stages: Gradle build, a **training run** that starts the real server and POSTs every
-snippet in `kore-prewarm/snippets/` at it, and the final image. That one run fills both caches - the IR
-cache from the compiles, the JDK AOT cache from `-XX:AOTMode=record`. Neither is load-bearing: a failed AOT
-step still ships a working image, just a few seconds slower per cold start.
+Two phases. **Gradle runs on the host**, not in a Docker layer, because a layer cannot keep the dependency
+and build caches between runs and re-resolving them is most of a cold build; the image then consumes what
+the host produced:
+
+```
+build/libs/kotlin-compiler-server-<kotlin>-SNAPSHOT.jar
+<kotlin>/        JVM klibs
+<kotlin>-js/     JS klibs, Kore included
+ir-cache-seed/   a trained IR cache, or empty
+```
+
+**Docker assembles and trains.** The training run starts the real server and POSTs every snippet in
+`kore-prewarm/snippets/` at the real endpoint, which fills both caches at once - the IR cache from the
+compiles, the JDK AOT cache from `-XX:AOTMode=record` followed by `-XX:AOTMode=create`. Neither is
+load-bearing: a failed AOT step still ships a working image, just a few seconds slower per cold start.
 
 A snippet that stops compiling after a Kore version bump prints `prewarm: <name> - did not compile` and is
 skipped. The build only fails when *none* of them compile, which means the klibs are wrong.
+
+### Slim mode
+
+`-Pkore.slim=true` drops the Compose/wasm playground, which this backend never serves. That removes the
+skiko, binaryen, node and npm-install chain along with `:cache-maker` entirely - 29 tasks instead of 123 -
+and stops the wasm and compose-wasm klibs (33 MB) from being downloaded and copied. `application.properties`
+gets a constant where the compose-wasm runtime hash would be.
+
+Unset, the build is upstream's.
+
+### What CI caches
+
+| Cache | Carried by | Buys |
+|---|---|---|
+| Gradle user home and build cache | `gradle/actions/setup-gradle` | dependency resolution and compilation on an unchanged tree |
+| The trained Kotlin/JS IR cache | `actions/cache` on `ir-cache-seed`, refilled from the `ir-cache-export` stage of the image | a training run that pays only for lowerings nobody has reached yet |
+| Docker layers | `type=gha` | the assemble stage, and the whole prewarm stage when its inputs are unchanged |
+
+The IR cache key is the Kotlin version, the Kore version and a hash of `kore-prewarm/` plus the fork's own
+compile settings, so a version bump starts a fresh lineage rather than seeding a stale cache.
+
+The image is `load`ed rather than pushed first, so the smoke test runs against the exact bytes before anyone
+can pull them. It asserts that both caches shipped, that the JVM actually started with `-XX:AOTCache`, and
+that `kore-prewarm/smoke/unseen.kt` - deliberately not one of the prewarm snippets - compiles in well under
+the ~104 s an empty cache costs.
+
+## Running it locally without Docker
+
+```sh
+./run-local.sh
+```
+
+Builds the boot jar if it is missing, then serves on 8090 - not 8080, which is where the Kobweb dev server
+lives - with the IR cache in `ir-cache/`. The first compile against an empty cache costs about a minute and
+every one after that ~10 s, so it is worth POSTing `kore-prewarm/snippets/*.kt` once before using the page.
+
+Point the site at it with `kore.playgroundApiUrl=http://localhost:8090` in `~/.gradle/gradle.properties`.
 
 ## Deploying
 
