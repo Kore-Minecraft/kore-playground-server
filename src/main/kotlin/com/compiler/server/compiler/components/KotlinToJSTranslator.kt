@@ -2,6 +2,7 @@ package com.compiler.server.compiler.components
 
 import com.compiler.server.common.components.KotlinEnvironment
 import com.compiler.server.common.components.usingTempDirectory
+import com.compiler.server.kore.KoreCompileSettings
 import com.compiler.server.model.*
 import com.compiler.server.utils.*
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -9,8 +10,11 @@ import org.jetbrains.kotlin.cli.js.K2JSCompiler
 import org.jetbrains.kotlin.cli.js.KotlinWasmCompiler
 import org.springframework.stereotype.Service
 import kotlin.io.encoding.Base64
+import java.nio.file.Path
 import kotlin.io.path.div
 import kotlin.io.path.exists
+import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.name
 import kotlin.io.path.readBytes
 import kotlin.io.path.readText
 
@@ -24,6 +28,7 @@ class KotlinToJSTranslator(
     private val wasmCompilerArguments: Set<ExtendedCompilerArgument>,
     private val composeWasmCompilerArguments: Set<ExtendedCompilerArgument>,
     private val kotlinEnvironment: KotlinEnvironment,
+    private val koreCompileSettings: KoreCompileSettings,
 ) {
     companion object {
         internal const val JS_IR_CODE_BUFFER = "playground.output?.buffer_1;\n"
@@ -37,20 +42,29 @@ class KotlinToJSTranslator(
         """.trimIndent()
 
         const val BEFORE_MAIN_CALL_LINE = 4
+
+        /** UMD headers list their dependencies within the first few lines; scanning further is wasted work. */
+        private const val UMD_PREAMBLE_LENGTH = 16 * 1024
+
+        private val UMD_REQUIRE_REGEX = Regex("""require\('\./([^']+\.js)'\)""")
     }
 
     fun translateJs(
         files: List<ProjectFile>,
         arguments: List<String>,
         jsCompilerArguments: JsCompilerArguments,
-        translate: (List<ProjectFile>, List<String>, JsCompilerArguments) -> CompilationResult<String>
+        translate: (List<ProjectFile>, List<String>, JsCompilerArguments) -> CompilationResult<JsTranslationOutput>
     ): TranslationJSResult = try {
         val compilationResult = translate(files, arguments, jsCompilerArguments)
-        val jsCode = when (compilationResult) {
-            is Compiled<String> -> compilationResult.result
+        val output = when (compilationResult) {
+            is Compiled<JsTranslationOutput> -> compilationResult.result
             is NotCompiled -> null
         }
-        TranslationJSResult(jsCode = jsCode, compilerDiagnostics = compilationResult.compilerDiagnostics)
+        TranslationJSResult(
+            jsCode = output?.entry,
+            compilerDiagnostics = compilationResult.compilerDiagnostics,
+            jsFiles = output?.files,
+        )
     } catch (e: Exception) {
         TranslationJSResult(exception = e.toExceptionDescriptor())
     }
@@ -100,7 +114,7 @@ class KotlinToJSTranslator(
         files: List<ProjectFile>,
         arguments: List<String>,
         userCompilerArguments: JsCompilerArguments
-    ): CompilationResult<String> =
+    ): CompilationResult<JsTranslationOutput> =
         usingTempDirectory { inputDir ->
             usingTempDirectory { outputDir ->
                 val ioFiles = files.writeToIoFiles(inputDir)
@@ -121,13 +135,65 @@ class KotlinToJSTranslator(
                                 compilerArgumentsUtil.PREDEFINED_JS_SECOND_PHASE_ARGUMENTS,
                                 userCompilerArguments.secondPhase
                             ) + "-ir-output-dir=${(outputDir / "js").toFile().canonicalPath}" + "-Xinclude=$klibPath"
-                        jsCompiler.tryCompilation(inputDir, ioFiles, secondPhaseArguments)
+                        jsCompiler.tryCompilation(
+                            inputDir,
+                            ioFiles,
+                            koreCompileSettings.applyToSecondPhase(secondPhaseArguments)
+                        )
                     }
-                    .map { (outputDir / "js" / "$JS_DEFAULT_MODULE_NAME.js").readText() }
-                    .map { it.withMainArgumentsIr(arguments) }
-                    .map(::redirectOutput)
+                    .map { readJsOutput(outputDir / "js", arguments) }
             }
         }
+
+    /**
+     * Collects the second phase output.
+     *
+     * Upstream emits a single DCE'd bundle, which stays the default. Under the IR build cache the compiler
+     * emits one UMD chunk per module instead, and all of them are returned so a browser can evaluate them
+     * itself - the ten library chunks are identical between two unrelated snippets and cache cleanly, while
+     * only `Kore-kore.js` and `playground.js` genuinely change.
+     */
+    private fun readJsOutput(jsDirectory: Path, arguments: List<String>): JsTranslationOutput {
+        val entryName = "$JS_DEFAULT_MODULE_NAME.js"
+
+        if (!koreCompileSettings.perModuleOutput) {
+            val entry = redirectOutput((jsDirectory / entryName).readText().withMainArgumentsIr(arguments))
+            return JsTranslationOutput(entry = entry, files = null)
+        }
+
+        val chunks = jsDirectory.listDirectoryEntries("*.js").associateTo(linkedMapOf()) { it.name to it.readText() }
+        val entry = chunks[entryName]?.withMainArgumentsIr(arguments)
+            ?: error("Second phase produced no $entryName in $jsDirectory")
+        chunks[entryName] = entry
+
+        return JsTranslationOutput(entry = entry, files = orderChunks(chunks))
+    }
+
+    /**
+     * Sorts the per-module chunks so a plain loader can evaluate them top to bottom.
+     *
+     * Each chunk is UMD and names what it needs in its `require('./x.js')` preamble, so a depth-first walk
+     * over those references is enough - no bundler and no module system on the browser side.
+     */
+    private fun orderChunks(chunks: Map<String, String>): List<JsFile> {
+        val ordered = linkedMapOf<String, String>()
+        val visiting = mutableSetOf<String>()
+
+        fun visit(name: String) {
+            val text = chunks[name] ?: return
+            if (name in ordered || !visiting.add(name)) return
+
+            UMD_REQUIRE_REGEX.findAll(text.take(UMD_PREAMBLE_LENGTH))
+                .map { it.groupValues[1] }
+                .distinct()
+                .forEach(::visit)
+
+            ordered[name] = text
+        }
+
+        chunks.keys.sorted().forEach(::visit)
+        return ordered.map { JsFile(name = it.key, text = it.value) }
+    }
 
     private fun redirectOutput(code: String): String {
         val listLines = code
@@ -300,6 +366,12 @@ private fun String.withMainArgumentsIr(arguments: List<String>): String {
         String.format(mainIrFunction, arguments.joinToString { ObjectMapper().writeValueAsString(it) })
     )
 }
+
+/** Second phase output: the entry chunk, plus every chunk in evaluation order when per-module is on. */
+data class JsTranslationOutput(
+    val entry: String,
+    val files: List<JsFile>?,
+)
 
 data class WasmTranslationSuccessfulOutput(
     val jsCode: String,

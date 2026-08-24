@@ -116,6 +116,12 @@ dependencies {
     kotlinCompilerPluginDependency(libs.kotlin.serialization.plugin)
     kotlinJsDependency(libs.kotlin.stdlib.js)
     kotlinJsDependency(libs.kotlin.dom.api.compat)
+
+    // Kore playground: transitive, so knbt / kotlinx-io / kotlinx-serialization JS klibs come along.
+    kotlinJsDependency("io.github.ayfri.kore:kore:2.8.0-26.1.2")
+    kotlinJsDependency("io.github.ayfri.kore:oop:2.8.0-26.1.2")
+    kotlinJsDependency("io.github.ayfri.kore:helpers:2.8.0-26.1.2")
+
     kotlinWasmDependency(libs.kotlin.stdlib.wasm.js)
 
     // compose

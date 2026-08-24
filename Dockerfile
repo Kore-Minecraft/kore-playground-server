@@ -1,3 +1,6 @@
+# Kore playground compile backend: upstream kotlin-compiler-server plus Kore's JS klibs, a prewarmed
+# Kotlin/JS IR build cache and a JDK AOT cache. See README-KORE.md.
+
 FROM amazoncorretto:17-al2023 AS build
 
 ARG KOTLIN_VERSION
@@ -11,9 +14,6 @@ RUN if [ -z "$KOTLIN_VERSION" ]; then \
 ENV DEVELOCITY_ACCESS_KEY=$DEVELOCITY_ACCESS_KEY
 ENV KOTLIN_LIB=$KOTLIN_VERSION
 ENV KOTLIN_LIB_JS=${KOTLIN_VERSION}-js
-ENV KOTLIN_LIB_WASM=${KOTLIN_VERSION}-wasm
-ENV KOTLIN_LIB_COMPOSE_WASM=${KOTLIN_VERSION}-compose-wasm
-ENV KOTLIN_COMPOSE_WASM_COMPILER_PLUGINS=${KOTLIN_VERSION}-compose-wasm-compiler-plugins
 
 RUN yum install -y findutils libatomic && yum clean all
 
@@ -24,23 +24,50 @@ ADD . /kotlin-compiler-server
 RUN ./gradlew build -x test
 RUN mkdir -p /build/libs && (cd /build/libs;  jar -xf /kotlin-compiler-server/build/libs/kotlin-compiler-server-${KOTLIN_LIB}-SNAPSHOT.jar)
 
-FROM amazoncorretto:17-al2023
+# The AOT cache refuses a classpath containing a plain directory, so the exploded classes become a jar.
+RUN cd /build/libs/BOOT-INF/classes && jar -cf /build/app.jar .
 
-RUN mkdir /kotlin-compiler-server
+
+# Assembles the runtime layout, then trains both caches against the real server on the real endpoint.
+FROM amazoncorretto:25-al2023 AS prewarm
+
+ARG KOTLIN_VERSION
+ENV KOTLIN_LIB=$KOTLIN_VERSION
+ENV KOTLIN_LIB_JS=${KOTLIN_VERSION}-js
+
+RUN dnf install -y jq && dnf clean all
+
 WORKDIR /kotlin-compiler-server
 
 COPY --from=build /build/libs/BOOT-INF/lib /kotlin-compiler-server/lib
 COPY --from=build /build/libs/META-INF /kotlin-compiler-server/META-INF
-COPY --from=build /build/libs/BOOT-INF/classes /kotlin-compiler-server
+COPY --from=build /build/app.jar /kotlin-compiler-server/app.jar
 COPY --from=build /kotlin-compiler-server/${KOTLIN_LIB} /kotlin-compiler-server/${KOTLIN_LIB}
 COPY --from=build /kotlin-compiler-server/${KOTLIN_LIB_JS} /kotlin-compiler-server/${KOTLIN_LIB_JS}
-COPY --from=build /kotlin-compiler-server/${KOTLIN_LIB_WASM} /kotlin-compiler-server/${KOTLIN_LIB_WASM}
-COPY --from=build /kotlin-compiler-server/${KOTLIN_LIB_COMPOSE_WASM} /kotlin-compiler-server/${KOTLIN_LIB_COMPOSE_WASM}
-COPY --from=build /kotlin-compiler-server/${KOTLIN_COMPOSE_WASM_COMPILER_PLUGINS} /kotlin-compiler-server/${KOTLIN_COMPOSE_WASM_COMPILER_PLUGINS}
+COPY kore-prewarm /kore-prewarm
+
+# One frozen classpath string, shared by the AOT record, create and run steps - they must match exactly.
+RUN printf -- '-cp /kotlin-compiler-server/app.jar:%s\n' \
+        "$(find /kotlin-compiler-server/lib -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')" \
+        > /kotlin-compiler-server/jvm.args
+
+ENV KORE_JS_CACHE_DIRECTORY=/kotlin-compiler-server/ir-cache
+
+RUN /kore-prewarm/train.sh
+
+
+FROM amazoncorretto:25-al2023
+
+# Only for the container health check; the server itself needs nothing beyond the JDK.
+RUN dnf install -y curl-minimal && dnf clean all
+
+WORKDIR /kotlin-compiler-server
+
+COPY --from=prewarm /kotlin-compiler-server /kotlin-compiler-server
 
 ENV PORT=8080
+ENV KORE_JS_CACHE_DIRECTORY=/kotlin-compiler-server/ir-cache
 
-CMD ["java", "-noverify", \
-    "-Dserver.port=${PORT}", \
-    "-cp", "/kotlin-compiler-server:/kotlin-compiler-server/lib/*", \
-    "com.compiler.server.CompilerApplicationKt"]
+EXPOSE 8080
+
+CMD ["/kotlin-compiler-server/entrypoint.sh"]

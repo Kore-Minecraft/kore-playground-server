@@ -2,7 +2,9 @@ package com.compiler.server.service
 
 import com.compiler.server.common.components.KotlinEnvironment
 import com.compiler.server.compiler.components.*
+import com.compiler.server.compiler.components.JsTranslationOutput
 import com.compiler.server.compiler.components.WasmTranslationSuccessfulOutput
+import com.compiler.server.kore.CompileGate
 import com.compiler.server.model.*
 import com.compiler.server.model.JsCompilerArguments
 import com.compiler.server.model.bean.VersionInfo
@@ -15,6 +17,7 @@ class KotlinProjectExecutor(
     internal val environment: KotlinEnvironment,
     private val version: VersionInfo,
     private val kotlinToJSTranslator: KotlinToJSTranslator,
+    private val compileGate: CompileGate,
     private val loggerDetailsStreamer: LoggerDetailsStreamer? = null,
 ) {
 
@@ -85,18 +88,21 @@ class KotlinProjectExecutor(
 
     private fun convertJsWithConverter(
         project: Project,
-        converter: (List<ProjectFile>, List<String>, JsCompilerArguments) -> CompilationResult<String>
+        converter: (List<ProjectFile>, List<String>, JsCompilerArguments) -> CompilationResult<JsTranslationOutput>
     ): TranslationJSResult {
-        return environment.synchronize {
-            kotlinToJSTranslator.translateJs(
-                project.files,
-                project.args.split(" "),
-                JsCompilerArguments(
-                    project.compilerArguments.getOrElse(0, { emptyMap() }),
-                    project.compilerArguments.getOrElse(1, { emptyMap() })
-                ),
-                converter
-            )
+        // Outside `synchronize`: that monitor already serializes compiles, but queues on it without bound.
+        return compileGate.singleFlight {
+            environment.synchronize {
+                kotlinToJSTranslator.translateJs(
+                    project.files,
+                    project.args.split(" "),
+                    JsCompilerArguments(
+                        project.compilerArguments.getOrElse(0, { emptyMap() }),
+                        project.compilerArguments.getOrElse(1, { emptyMap() })
+                    ),
+                    converter
+                )
+            }
         }
             .also { logExecutionResult(project, it) }
     }

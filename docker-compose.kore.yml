@@ -1,0 +1,32 @@
+# Kore playground compile backend, as deployed on Dokploy.
+#
+# One core is the whole budget: a Kotlin/JS compile is single-threaded, so a second core buys concurrency
+# rather than speed, and the cap is what keeps the rest of the box responsive under a compile flood.
+services:
+  kore-playground-server:
+    image: ghcr.io/kore-minecraft/kore-playground-server:latest
+    restart: unless-stopped
+
+    environment:
+      PORT: "8080"
+      ACCESS_CONTROL_ALLOW_ORIGIN_VALUE: "https://kore.ayfri.com"
+      KORE_JS_CACHE_DIRECTORY: /kotlin-compiler-server/ir-cache
+      KORE_JS_MAX_QUEUED_COMPILES: "8"
+      JAVA_OPTS: "-Xmx1g -XX:MaxMetaspaceSize=512m -Xss16m -XX:+UseSerialGC"
+
+    # No volume for the IR cache on purpose: it ships prewarmed in the image and takes exactly one writer.
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1500M
+        reservations:
+          memory: 512M
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/versions || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s

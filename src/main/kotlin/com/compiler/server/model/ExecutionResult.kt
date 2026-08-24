@@ -63,11 +63,25 @@ abstract class TranslationResultWithJsCode(
   exception: ExceptionDescriptor?
 ) : ExecutionResult(compilerDiagnostics, exception)
 
+/** One emitted JS chunk. Only present under per-module output, see `KoreCompileSettings`. */
+data class JsFile(
+  val name: String,
+  val text: String,
+)
+
 data class TranslationJSResult(
   override val jsCode: String? = null,
   override var exception: ExceptionDescriptor? = null,
   @field:JsonProperty("errors")
-  override var compilerDiagnostics: CompilerDiagnostics = CompilerDiagnostics()
+  override var compilerDiagnostics: CompilerDiagnostics = CompilerDiagnostics(),
+  /**
+   * Every chunk of a per-module compile, in evaluation order, or `null` for the single-bundle pipeline.
+   *
+   * [jsCode] still carries the entry chunk in both modes, so a client that only knows `jsCode` keeps
+   * working - it just needs the chunks too before that entry can run.
+   */
+  @field:JsonInclude(JsonInclude.Include.NON_NULL)
+  val jsFiles: List<JsFile>? = null,
 ) : TranslationResultWithJsCode(jsCode, compilerDiagnostics, exception)
 
 data class TranslationWasmResult(

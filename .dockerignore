@@ -1,0 +1,10 @@
+.git
+.github
+.gradle
+.idea
+build
+*/build
+*/*/build
+logs
+out
+kotlin-js-store

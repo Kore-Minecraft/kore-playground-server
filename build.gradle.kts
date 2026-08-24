@@ -93,6 +93,10 @@ fun Project.generateProperties(
     "server.compression.enabled" to "true",
     "server.compression.mime-types" to "application/json,text/javascript,application/wasm",
     "springdoc.swagger-ui.path" to "/api-docs/swagger-ui.html",
+    // Kore playground, see README-KORE.md. An empty cache directory keeps the upstream JS pipeline.
+    "kore.js.cache-directory" to "\${KORE_JS_CACHE_DIRECTORY:}",
+    "kore.js.max-queued-compiles" to "\${KORE_JS_MAX_QUEUED_COMPILES:8}",
+    "kore.js.queue-timeout-seconds" to "\${KORE_JS_QUEUE_TIMEOUT_SECONDS:120}",
 )
 
 fun MapProperty<String, String>.fillProperties(

@@ -1,0 +1,65 @@
+# Builds the Kore playground compile backend and pushes it to GHCR.
+#
+# The build is far too heavy for the deployment box (several GB of RAM, and the prewarm run compiles every
+# snippet), so it happens here and Dokploy only ever pulls.
+name: Kore playground image
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: kore-image
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/kore-minecraft/kore-playground-server
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the Kotlin version
+        id: kotlin
+        run: |
+          version=$(awk '{ if ($1 == "kotlin") { gsub(/"/, "", $2); print $2; } }' FS=' = ' ./gradle/libs.versions.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the Kore version
+        id: kore
+        run: |
+          version=$(grep -o 'io.github.ayfri.kore:kore:[^"]*' dependencies/build.gradle.kts | head -1 | cut -d: -f3)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            KOTLIN_VERSION=${{ steps.kotlin.outputs.version }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:kore-${{ steps.kore.outputs.version }}
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Dokploy only pulls; building on the deployment box would take several GB of RAM and the whole CPU.
+      - name: Tell Dokploy to pull the new image
+        if: github.ref == 'refs/heads/master'
+        run: curl -sf -X POST "${{ secrets.DOKPLOY_DEPLOY_HOOK }}"
