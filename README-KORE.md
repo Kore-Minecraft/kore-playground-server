@@ -161,12 +161,13 @@ the ~104 s an empty cache costs.
 ## Running it locally without Docker
 
 ```sh
-./run-local.sh
+./run-local.sh            # or, on Windows:
+./run-local.ps1           # -Port, -CacheDirectory and -Rebuild override the defaults
 ```
 
 Builds the boot jar if it is missing, then serves on 8090 - not 8080, which is where the Kobweb dev server
 lives - with the IR cache in `ir-cache/`. The first compile against an empty cache costs about a minute and
-every one after that ~10 s, so it is worth POSTing `kore-prewarm/snippets/*.kt` once before using the page.
+every one after that ~6 s, so it is worth POSTing `kore-prewarm/snippets/*.kt` once before using the page.
 
 Point the site at it with `kore.playgroundApiUrl=http://localhost:8090` in `~/.gradle/gradle.properties`.
 
