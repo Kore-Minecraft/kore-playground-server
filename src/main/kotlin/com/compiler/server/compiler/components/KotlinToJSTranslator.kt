@@ -9,12 +9,19 @@ import com.compiler.server.utils.*
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.jetbrains.kotlin.cli.js.K2JSCompiler
 import org.jetbrains.kotlin.cli.js.KotlinWasmCompiler
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import kotlin.io.encoding.Base64
+import java.io.File
 import java.nio.file.Path
+import java.security.MessageDigest
+import java.util.HexFormat
+import kotlin.io.path.createDirectories
 import kotlin.io.path.div
 import kotlin.io.path.exists
+import kotlin.io.path.isDirectory
 import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.moveTo
 import kotlin.io.path.name
 import kotlin.io.path.readBytes
 import kotlin.io.path.readText
@@ -48,7 +55,58 @@ class KotlinToJSTranslator(
         private const val UMD_PREAMBLE_LENGTH = 16 * 1024
 
         private val UMD_REQUIRE_REGEX = Regex("""require\('\./([^']+\.js)'\)""")
+
+        private const val ANCHOR_MODULE_NAME = "kore-anchor"
+
+        private val log = LoggerFactory.getLogger(KotlinToJSTranslator::class.java)
     }
+
+    /**
+     * A klib built from [KoreCompileSettings.anchorSources], linked into every compile as one more library.
+     *
+     * The IR cache exports from each library exactly what other modules use, so a snippet touching another part of
+     * Kore than the previous one made it re-lower those Kore files and regenerate all of `Kore-kore.js`: ~11 s for
+     * switching between two examples. This module keeps using everything the examples use, so switching between
+     * them leaves Kore untouched, ~3 s.
+     *
+     * The linker only loads what something reaches in a library, so each snippet's `playground()` is called from a
+     * `@JsExport` function, a root it always keeps. That also makes the entry chunk import the anchor's, so it ships
+     * like any library chunk: ~50 kB that never change, downloaded once by a client keeping chunks by hash. Built by
+     * the first compile, inside the compile gate. Sources that stopped compiling, typically after a Kore bump, are
+     * left out with a warning instead of failing every compile.
+     */
+    private val anchorKlib: String? by lazy {
+        val workspace = koreCompileSettings.anchorDirectory ?: return@lazy null
+        val sources = koreCompileSettings.anchorSources?.takeIf { it.isDirectory() }?.listDirectoryEntries("*.kt")?.sorted()
+        var files = sources.orEmpty().mapIndexed { index, source ->
+            val text = "package kore.anchor.a$index\n\n${source.readText()}\n\n@JsExport\nfun anchor$index() {\n    playground()\n}\n"
+            ProjectFile(text = text, name = source.name)
+        }
+
+        while (files.isNotEmpty()) {
+            val inputDir = (workspace / "src").also { it.toFile().deleteRecursively() }.createDirectories()
+            val klibPath = (workspace / "klib").also { it.toFile().deleteRecursively() }.toFile().canonicalPath
+            val ioFiles = files.writeToIoFiles(inputDir)
+            val arguments = compilerArgumentsUtil.convertCompilerArgumentsToCompilationString(
+                jsCompilerArguments,
+                compilerArgumentsUtil.PREDEFINED_JS_FIRST_PHASE_ARGUMENTS,
+                emptyMap()
+            ).replacingValueOf("-ir-output-name") { ANCHOR_MODULE_NAME } + "-ir-output-dir=$klibPath"
+
+            val result = K2JSCompiler().tryCompilation(inputDir, ioFiles, ioFiles.map { it.toFile().canonicalPath } + arguments)
+            val broken = result.compilerDiagnostics.map.filterValues { it.any { error -> error.severity == ProjectSeveriry.ERROR } }.keys
+            if (result is Compiled && broken.isEmpty()) return@lazy klibPath.also { log.info("Anchor module built from ${files.size} snippets") }
+
+            log.warn("Anchor snippets left out, they no longer compile: $broken")
+            files = files.filter { it.name !in broken }.takeIf { it.size < files.size }.orEmpty()
+        }
+
+        null
+    }
+
+    /** Replaces the value following [flag], the shape `convertCompilerArgumentsToCompilationString` gives string arguments. */
+    private fun List<String>.replacingValueOf(flag: String, value: (String) -> String) =
+        mapIndexed { index, argument -> if (index > 0 && this[index - 1] == flag) value(argument) else argument }
 
     fun translateJs(
         files: List<ProjectFile>,
@@ -115,49 +173,79 @@ class KotlinToJSTranslator(
         files: List<ProjectFile>,
         arguments: List<String>,
         userCompilerArguments: JsCompilerArguments
-    ): CompilationResult<JsTranslationOutput> =
-        usingTempDirectory { inputDir ->
-            usingTempDirectory { outputDir ->
-                val ioFiles = files.writeToIoFiles(inputDir)
-                val filePaths = ioFiles.map { it.toFile().canonicalPath }
-                val klibPath = (outputDir / "klib").toFile().canonicalPath
-                val additionalCompilerArgumentsForKLib =
+    ): CompilationResult<JsTranslationOutput> {
+        val workspace = koreCompileSettings.snippetDirectory
+            ?: return usingTempDirectory { translateWithIrIn(it, files, arguments, userCompilerArguments) }.requireOutput()
+
+        // The IR cache writes nothing for an unchanged program, trusting the previous output to still be in `js/`.
+        // When it is gone, one compile as a module of its own rewrites every chunk.
+        val result = translateWithIrIn(workspace, files, arguments, userCompilerArguments)
+        if (result !is Compiled || result.result != null) return result.requireOutput()
+
+        return usingTempDirectory { translateWithIrIn(it, files, arguments, userCompilerArguments) }.requireOutput()
+    }
+
+    private fun CompilationResult<JsTranslationOutput?>.requireOutput() =
+        map { it ?: error("Second phase produced no $JS_DEFAULT_MODULE_NAME.js") }
+
+    /**
+     * Compiles [files] inside [directory]: sources in `src/`, klib in `klib/`, JavaScript in `js/`, which is kept.
+     *
+     * The output is `null` when the second phase wrote no entry chunk, which the IR cache does for a program it
+     * considers already built.
+     */
+    private fun translateWithIrIn(
+        directory: Path,
+        files: List<ProjectFile>,
+        arguments: List<String>,
+        userCompilerArguments: JsCompilerArguments,
+    ): CompilationResult<JsTranslationOutput?> {
+        val inputDir = (directory / "src").also { it.toFile().deleteRecursively() }.createDirectories()
+        val klibPath = (directory / "klib").also { it.toFile().deleteRecursively() }.toFile().canonicalPath
+        val jsDirectory = directory / "js"
+        val ioFiles = files.writeToIoFiles(inputDir)
+        val filePaths = ioFiles.map { it.toFile().canonicalPath }
+        val additionalCompilerArgumentsForKLib =
+            compilerArgumentsUtil.convertCompilerArgumentsToCompilationString(
+                jsCompilerArguments,
+                compilerArgumentsUtil.PREDEFINED_JS_FIRST_PHASE_ARGUMENTS,
+                userCompilerArguments.firstPhase
+            ) + "-ir-output-dir=$klibPath"
+        val jsCompiler = K2JSCompiler()
+        var phaseStartedAt = System.nanoTime()
+
+        fun phaseMs(): Long {
+            val now = System.nanoTime()
+            return ((now - phaseStartedAt) / 1_000_000).also { phaseStartedAt = now }
+        }
+
+        KoreProgress.emit("phase", "name" to "klib")
+
+        return jsCompiler.tryCompilation(inputDir, ioFiles, filePaths + additionalCompilerArgumentsForKLib)
+            .flatMap {
+                KoreProgress.emit("phase", "name" to "js", "previousMs" to phaseMs())
+                val anchor = anchorKlib
+                val secondPhaseArguments =
                     compilerArgumentsUtil.convertCompilerArgumentsToCompilationString(
                         jsCompilerArguments,
-                        compilerArgumentsUtil.PREDEFINED_JS_FIRST_PHASE_ARGUMENTS,
-                        userCompilerArguments.firstPhase
-                    ) + "-ir-output-dir=$klibPath"
-                val jsCompiler = K2JSCompiler()
-                var phaseStartedAt = System.nanoTime()
-
-                fun phaseMs(): Long {
-                    val now = System.nanoTime()
-                    return ((now - phaseStartedAt) / 1_000_000).also { phaseStartedAt = now }
-                }
-
-                KoreProgress.emit("phase", "name" to "klib")
-
-                jsCompiler.tryCompilation(inputDir, ioFiles, filePaths + additionalCompilerArgumentsForKLib)
-                    .flatMap {
-                        KoreProgress.emit("phase", "name" to "js", "previousMs" to phaseMs())
-                        val secondPhaseArguments =
-                            compilerArgumentsUtil.convertCompilerArgumentsToCompilationString(
-                                jsCompilerArguments,
-                                compilerArgumentsUtil.PREDEFINED_JS_SECOND_PHASE_ARGUMENTS,
-                                userCompilerArguments.secondPhase
-                            ) + "-ir-output-dir=${(outputDir / "js").toFile().canonicalPath}" + "-Xinclude=$klibPath"
-                        jsCompiler.tryCompilation(
-                            inputDir,
-                            ioFiles,
-                            koreCompileSettings.applyToSecondPhase(secondPhaseArguments)
-                        )
-                    }
-                    .map {
-                        KoreProgress.emit("phase", "name" to "collect", "previousMs" to phaseMs())
-                        readJsOutput(outputDir / "js", arguments)
-                    }
+                        compilerArgumentsUtil.PREDEFINED_JS_SECOND_PHASE_ARGUMENTS,
+                        userCompilerArguments.secondPhase
+                    ).replacingValueOf("-libraries") { if (anchor == null) it else it + File.pathSeparator + anchor } +
+                        "-ir-output-dir=${jsDirectory.toFile().canonicalPath}" + "-Xinclude=$klibPath"
+                jsCompiler.tryCompilation(
+                    inputDir,
+                    ioFiles,
+                    koreCompileSettings.applyToSecondPhase(secondPhaseArguments)
+                )
             }
-        }
+            .map {
+                KoreProgress.emit("phase", "name" to "collect", "previousMs" to phaseMs())
+                val entry = jsDirectory / "$JS_DEFAULT_MODULE_NAME.js"
+                // An unchanged program comes out of the IR cache named after its klib instead of `-ir-output-name`.
+                (jsDirectory / "kotlin_$JS_DEFAULT_MODULE_NAME.js").takeIf { it.exists() }?.moveTo(entry, overwrite = true)
+                if (entry.exists()) readJsOutput(jsDirectory, arguments) else null
+            }
+    }
 
     /**
      * Collects the second phase output.
@@ -172,7 +260,6 @@ class KotlinToJSTranslator(
 
         if (!koreCompileSettings.perModuleOutput) {
             val entry = redirectOutput((jsDirectory / entryName).readText().withMainArgumentsIr(arguments))
-            KoreProgress.emit("output", "chunks" to 1, "bytes" to entry.length)
             return JsTranslationOutput(entry = entry, files = null)
         }
 
@@ -181,11 +268,12 @@ class KotlinToJSTranslator(
             ?: error("Second phase produced no $entryName in $jsDirectory")
         chunks[entryName] = entry
 
-        // The caller cannot get this from `Content-Length`: the body is gzipped and it reads the decoded stream.
-        KoreProgress.emit("output", "chunks" to chunks.size, "bytes" to chunks.values.sumOf { it.length })
-
         return JsTranslationOutput(entry = entry, files = orderChunks(chunks))
     }
+
+    /** 128 bits of SHA-256, plenty to tell a dozen chunks apart across compiles. */
+    private fun hashOf(text: String): String =
+        HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.toByteArray()), 0, 16)
 
     /**
      * Sorts the per-module chunks so a plain loader can evaluate them top to bottom.
@@ -210,7 +298,7 @@ class KotlinToJSTranslator(
         }
 
         chunks.keys.sorted().forEach(::visit)
-        return ordered.map { JsFile(name = it.key, text = it.value) }
+        return ordered.map { JsFile(name = it.key, hash = hashOf(it.value), text = it.value) }
     }
 
     private fun redirectOutput(code: String): String {

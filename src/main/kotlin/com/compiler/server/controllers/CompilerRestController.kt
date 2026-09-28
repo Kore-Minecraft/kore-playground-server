@@ -14,6 +14,7 @@ import com.compiler.server.model.KotlinTranslatableCompiler
 import com.compiler.server.model.Project
 import com.compiler.server.model.ProjectFile
 import com.compiler.server.model.ProjectType
+import com.compiler.server.model.TranslationJSResult
 import com.compiler.server.model.TranslationResultWithJsCode
 import com.compiler.server.service.CompilerArgumentsService
 import com.compiler.server.service.KotlinProjectExecutor
@@ -75,15 +76,24 @@ class CompilerRestController(
         )
     }
 
+    /** [known] lists the chunk hashes the caller already holds, comma separated: their texts are left out. */
     @PostMapping("/translate/js")
-    fun translateJs(@RequestBody @Valid request: TranslateJsRequest): TranslationResultWithJsCode {
+    fun translateJs(
+        @RequestBody @Valid request: TranslateJsRequest,
+        @RequestParam(required = false) known: String?,
+    ): TranslationResultWithJsCode {
         return kotlinProjectExecutor.convertToJsIr(
             Project(
                 args = request.args,
                 files = request.files.map { ProjectFile(name = it.name, text = it.text) },
                 compilerArguments = listOf(request.firstPhaseCompilerArguments, request.secondPhaseCompilerArguments)
             )
-        )
+        ).withoutKnownChunks(known)
+    }
+
+    private fun TranslationResultWithJsCode.withoutKnownChunks(known: String?): TranslationResultWithJsCode {
+        val hashes = known?.split(',')?.filterTo(mutableSetOf()) { it.isNotBlank() }.orEmpty()
+        return (this as? TranslationJSResult)?.withoutKnownChunks(hashes) ?: this
     }
 
     /**
@@ -99,7 +109,10 @@ class CompilerRestController(
      * gzipped.
      */
     @PostMapping("/translate/js/stream", produces = [NDJSON_CONTENT_TYPE])
-    fun translateJsStreaming(@RequestBody @Valid request: TranslateJsRequest): ResponseEntity<StreamingResponseBody> {
+    fun translateJsStreaming(
+        @RequestBody @Valid request: TranslateJsRequest,
+        @RequestParam(required = false) known: String?,
+    ): ResponseEntity<StreamingResponseBody> {
         val project = Project(
             args = request.args,
             files = request.files.map { ProjectFile(name = it.name, text = it.text) },
@@ -116,6 +129,13 @@ class CompilerRestController(
             try {
                 val result = KoreProgress.reportingTo({ progress -> write(mapOf("event" to progress.event) + progress.detail) }) {
                     kotlinProjectExecutor.convertToJsIr(project)
+                }.withoutKnownChunks(known)
+
+                // The caller cannot get this from `Content-Length`: the body is gzipped and it reads the decoded stream.
+                val sent = (result as? TranslationJSResult)?.jsFiles?.mapNotNull { it.text } ?: listOfNotNull(result.jsCode)
+                val reused = (result as? TranslationJSResult)?.jsFiles?.count { it.text == null } ?: 0
+                if (sent.isNotEmpty() || reused > 0) {
+                    write(mapOf("event" to "output", "chunks" to sent.size, "reused" to reused, "bytes" to sent.sumOf { it.length }))
                 }
 
                 write(mapOf("event" to "result", "result" to result))

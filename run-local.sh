@@ -11,7 +11,7 @@ jar="build/libs/kotlin-compiler-server-${kotlinVersion}-SNAPSHOT.jar"
 [ -f "$jar" ] || ./gradlew :bootJar -Pkore.slim=true
 
 # From the repository root: libraries.folder.js is a relative path.
-KORE_JS_CACHE_DIRECTORY="$PWD/ir-cache" exec java \
+KORE_JS_CACHE_DIRECTORY="$PWD/ir-cache" KORE_JS_ANCHOR_DIRECTORY="$PWD/kore-prewarm/snippets" exec java \
 	-Xmx2g -Xss16m \
 	-Dserver.port="${PORT:-8090}" \
 	-jar "$jar"

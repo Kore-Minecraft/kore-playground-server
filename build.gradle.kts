@@ -99,8 +99,11 @@ fun Project.generateProperties(
     "springdoc.swagger-ui.path" to "/api-docs/swagger-ui.html",
     // Kore playground, see README-KORE.md. An empty cache directory keeps the upstream JS pipeline.
     "kore.js.cache-directory" to "\${KORE_JS_CACHE_DIRECTORY:}",
+    "kore.js.anchor-directory" to "\${KORE_JS_ANCHOR_DIRECTORY:}",
     "kore.js.max-queued-compiles" to "\${KORE_JS_MAX_QUEUED_COMPILES:8}",
     "kore.js.queue-timeout-seconds" to "\${KORE_JS_QUEUE_TIMEOUT_SECONDS:120}",
+    // The streaming compile is an async request, cut at Tomcat's 30 s default: past the queue wait plus a cold compile.
+    "spring.mvc.async.request-timeout" to "300s",
 )
 
 fun MapProperty<String, String>.fillProperties(

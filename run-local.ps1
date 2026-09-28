@@ -22,6 +22,7 @@ if ($Rebuild -or -not (Test-Path $jar)) {
 }
 
 $env:KORE_JS_CACHE_DIRECTORY = $CacheDirectory
+$env:KORE_JS_ANCHOR_DIRECTORY = Join-Path $PSScriptRoot 'kore-prewarm/snippets'
 
 Write-Host "kotlin $kotlinVersion, cache $CacheDirectory, listening on http://localhost:$Port"
 & java -Xmx2g -Xss16m "-Dserver.port=$Port" -jar $jar

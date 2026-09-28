@@ -42,6 +42,8 @@ COPY --from=assemble /staging/app.jar /kotlin-compiler-server/app.jar
 COPY ${KOTLIN_VERSION} /kotlin-compiler-server/${KOTLIN_VERSION}
 COPY ${KOTLIN_VERSION}-js /kotlin-compiler-server/${KOTLIN_VERSION}-js
 COPY kore-prewarm /kore-prewarm
+# The prewarm snippets double as the anchor module, see KotlinToJSTranslator.anchorKlib.
+COPY kore-prewarm/snippets /kotlin-compiler-server/anchor
 
 # A cache from a previous build, so the training run pays for lowerings nobody has reached yet rather than
 # for all of them. Empty on a fresh checkout, which only makes the training run slower.
@@ -50,6 +52,7 @@ COPY ir-cache-seed /kotlin-compiler-server/ir-cache
 RUN /kore-prewarm/classpath.sh
 
 ENV KORE_JS_CACHE_DIRECTORY=/kotlin-compiler-server/ir-cache
+ENV KORE_JS_ANCHOR_DIRECTORY=/kotlin-compiler-server/anchor
 
 RUN /kore-prewarm/train.sh
 
@@ -71,6 +74,7 @@ COPY --from=prewarm /kotlin-compiler-server /kotlin-compiler-server
 
 ENV PORT=8080
 ENV KORE_JS_CACHE_DIRECTORY=/kotlin-compiler-server/ir-cache
+ENV KORE_JS_ANCHOR_DIRECTORY=/kotlin-compiler-server/anchor
 
 EXPOSE 8080
 
