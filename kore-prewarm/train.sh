@@ -43,6 +43,14 @@ fi
 # The training run leaves its own compiles behind; only the IR cache is worth keeping.
 rm -rf "$APP/logs" /tmp/prewarm-*.json
 
+# Three different snippets for entrypoint.sh to compile at boot: repeating one would only warm the no-op path.
+mkdir -p "$APP/warmup"
+for snippet in $(ls /kore-prewarm/snippets/*.kt | head -3); do
+	jq -n --rawfile user "$snippet" --rawfile harness /kore-prewarm/harness.kt \
+		'{args: "", files: [{name: "main.kt", text: $user}, {name: "__harness.kt", text: $harness}]}' \
+		> "$APP/warmup/$(basename "$snippet" .kt).json"
+done
+
 cp /kore-prewarm/entrypoint.sh "$APP/entrypoint.sh"
 chmod +x "$APP/entrypoint.sh"
 

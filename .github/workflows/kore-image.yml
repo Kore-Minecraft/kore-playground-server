@@ -98,8 +98,15 @@ jobs:
           docker run -d --name smoke --cpus 1.0 --memory 1500m -p 8080:8080 -e KORE_JS_CACHE_DIRECTORY=/kotlin-compiler-server/ir-cache "$IMAGE:$GITHUB_SHA"
 
           docker exec smoke test -f /kotlin-compiler-server/app.aot || { echo "smoke: the AOT cache is missing from the image" >&2; exit 1; }
-          docker exec smoke sh -c "tr '\0' '\n' < /proc/1/cmdline | grep -q AOTCache" || { echo "smoke: the JVM started without the AOT cache" >&2; exit 1; }
+          # The entrypoint shell is PID 1 and the JVM its child; `[e]` keeps grep from matching its own command line.
+          docker exec smoke sh -c "grep -qa 'AOTCach[e]' /proc/[0-9]*/cmdline" || { echo "smoke: the JVM started without the AOT cache" >&2; exit 1; }
           test -n "$(docker exec smoke sh -c 'ls -A /kotlin-compiler-server/ir-cache')" || { echo "smoke: the IR cache shipped empty" >&2; exit 1; }
+
+          # Timed the way a visitor meets it: after the boot warmup has warmed the JIT and built the anchor module.
+          for attempt in $(seq 1 90); do
+            docker logs smoke 2>&1 | grep -q 'warmup: JIT warmed' && break
+            sleep 5
+          done
 
           PREWARM_SNIPPETS=kore-prewarm/smoke PREWARM_HARNESS=kore-prewarm/harness.kt ./kore-prewarm/prewarm.sh | tee smoke.log || { docker logs smoke; exit 1; }
 
