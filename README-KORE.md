@@ -15,7 +15,8 @@ maintain and no runaway process to kill: the only server-side cost is bounded co
 | `mavenLocal()` first, so a locally published Kore build wins over the Central release | `build-settings-logic/.../kotlin-compiler-server-version-catalog.settings.gradle.kts` |
 | Kotlin/JS IR build cache and per-module output, behind one property | `kore/KoreCompileSettings.kt` |
 | Every emitted chunk returned in dependency order as `jsFiles` | `KotlinToJSTranslator.kt`, `ExecutionResult.kt` |
-| One compile at a time with a bounded queue, 429 past it | `kore/CompileGate.kt`, `KotlinProjectExecutor.kt` |
+| One compile at a time with a bounded queue, 429 past it, and a separate lane for diagnostics | `kore/CompileGate.kt`, `KotlinProjectExecutor.kt` |
+| A streaming compile endpoint reporting queue position, compiler phase and output size as they happen | `CompilerRestController.kt`, `kore/KoreProgress.kt` |
 | Prewarmed IR cache and JDK AOT cache built into the image | `Dockerfile`, `kore-prewarm/` |
 | Slim mode, dropping the Compose/wasm playground from the build | `build.gradle.kts`, `dependencies/build.gradle.kts` |
 | The JS klib folder synced rather than copied, so an old Kore klib cannot linger on the classpath | `dependencies/build.gradle.kts` |
@@ -73,6 +74,36 @@ rather than a shared volume.
 dependency order, so a client evaluates them top to bottom - no bundler, no module system. `jsCode` still
 carries the entry chunk in both modes; under per-module output it needs the rest loaded first.
 
+## Progress while compiling
+
+`POST /api/compiler/translate/js/stream` runs the very same compile as `/translate/js` and answers with
+newline-delimited JSON. Every line but the last is a progress event, and the last one carries the ordinary
+result under `result`:
+
+```
+{"event":"queued","ahead":2,"lane":"compile"}
+{"event":"started","lane":"compile"}
+{"event":"phase","name":"klib"}
+{"event":"phase","name":"js","previousMs":3103}
+{"event":"phase","name":"collect","previousMs":15301}
+{"event":"output","chunks":12,"bytes":17047408}
+{"event":"result","result":{ … }}
+```
+
+A caller reading the stream can name the wait - queued behind somebody else, type-checking, linking,
+downloading 16 MB - instead of showing an anonymous spinner for 6-35 s. `output` lands before the payload
+and carries its uncompressed size, which is the one number a browser cannot get from `Content-Length`:
+the body is gzipped and `fetch` hands the decoded stream to the reader.
+
+NDJSON rather than server-sent events, because `text/event-stream` is not in `server.compression.mime-types`
+and never would be gzipped: the result alone is ~16 MB raw against 1.7 MB gzipped. `application/x-ndjson` is
+in that list, and Tomcat flushes each line through the gzip stream as it is written - measured, the phase
+events arrive seconds before the result.
+
+The pipeline reports through `KoreProgress`, a thread local sink: a compile runs synchronously on the
+request thread all the way down, so nothing has to be threaded through four upstream signatures. With no
+listener - every other endpoint - reporting is a null check.
+
 ## Diagnostics without a compile
 
 `POST /api/compiler/highlight` with `confType: "java"` compiles the snippet for the JVM and returns only
@@ -86,8 +117,8 @@ curl -s -X POST localhost:8090/api/compiler/highlight -H 'Content-Type: applicat
 That answers in **0.3-1.2 s** against 6-20 s for the JS path, which is what makes as-you-type squiggles
 possible in the editor. Two caveats:
 
-- It is **not** behind `CompileGate`: `highlight` calls `compileToJvm` directly, so concurrent requests all
-  run. On a one-core container that competes with a real compile, and it wants its own semaphore.
+- It has its **own** `CompileGate` lane, `kore.diagnostics.max-concurrent` permits with a queue four times
+  that, so an editor typing at it cannot starve the compile the page actually needs.
 - JVM and JS can disagree - a JVM-only API passes here and fails the real compile - so a clean highlight is
   not a promise that Run will work.
 

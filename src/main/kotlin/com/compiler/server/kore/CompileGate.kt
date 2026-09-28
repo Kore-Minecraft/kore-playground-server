@@ -43,10 +43,15 @@ class CompileGate(private val settings: KoreCompileSettings) {
         val depth get() = queued.get()
 
         fun <T> enter(block: () -> T): T {
-            if (queued.incrementAndGet() > queueLimit) {
+            val position = queued.incrementAndGet()
+
+            if (position > queueLimit) {
                 queued.decrementAndGet()
                 throw CompileBusyException("The $what queue is full, retry shortly.", RETRY_AFTER_FULL_SECONDS)
             }
+
+            // Waiting behind somebody else is the one delay the caller cannot guess from its own timings.
+            if (position > 1) KoreProgress.emit("queued", "ahead" to position - 1, "lane" to what)
 
             val acquired = try {
                 slot.tryAcquire(waitSeconds, TimeUnit.SECONDS)
@@ -60,6 +65,8 @@ class CompileGate(private val settings: KoreCompileSettings) {
                 queued.decrementAndGet()
                 throw CompileBusyException("Timed out waiting for a $what slot.", waitSeconds)
             }
+
+            KoreProgress.emit("started", "lane" to what)
 
             return try {
                 block()

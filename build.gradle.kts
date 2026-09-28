@@ -95,7 +95,7 @@ fun Project.generateProperties(
     "libraries.folder.compiler-plugins" to prefix + compilerPluginsForJVM,
     "spring.mvc.pathmatch.matching-strategy" to "ant_path_matcher",
     "server.compression.enabled" to "true",
-    "server.compression.mime-types" to "application/json,text/javascript,application/wasm",
+    "server.compression.mime-types" to "application/json,application/x-ndjson,text/javascript,application/wasm",
     "springdoc.swagger-ui.path" to "/api-docs/swagger-ui.html",
     // Kore playground, see README-KORE.md. An empty cache directory keeps the upstream JS pipeline.
     "kore.js.cache-directory" to "\${KORE_JS_CACHE_DIRECTORY:}",

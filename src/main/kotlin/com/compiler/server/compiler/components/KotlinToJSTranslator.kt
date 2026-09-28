@@ -3,6 +3,7 @@ package com.compiler.server.compiler.components
 import com.compiler.server.common.components.KotlinEnvironment
 import com.compiler.server.common.components.usingTempDirectory
 import com.compiler.server.kore.KoreCompileSettings
+import com.compiler.server.kore.KoreProgress
 import com.compiler.server.model.*
 import com.compiler.server.utils.*
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -127,8 +128,18 @@ class KotlinToJSTranslator(
                         userCompilerArguments.firstPhase
                     ) + "-ir-output-dir=$klibPath"
                 val jsCompiler = K2JSCompiler()
+                var phaseStartedAt = System.nanoTime()
+
+                fun phaseMs(): Long {
+                    val now = System.nanoTime()
+                    return ((now - phaseStartedAt) / 1_000_000).also { phaseStartedAt = now }
+                }
+
+                KoreProgress.emit("phase", "name" to "klib")
+
                 jsCompiler.tryCompilation(inputDir, ioFiles, filePaths + additionalCompilerArgumentsForKLib)
                     .flatMap {
+                        KoreProgress.emit("phase", "name" to "js", "previousMs" to phaseMs())
                         val secondPhaseArguments =
                             compilerArgumentsUtil.convertCompilerArgumentsToCompilationString(
                                 jsCompilerArguments,
@@ -141,7 +152,10 @@ class KotlinToJSTranslator(
                             koreCompileSettings.applyToSecondPhase(secondPhaseArguments)
                         )
                     }
-                    .map { readJsOutput(outputDir / "js", arguments) }
+                    .map {
+                        KoreProgress.emit("phase", "name" to "collect", "previousMs" to phaseMs())
+                        readJsOutput(outputDir / "js", arguments)
+                    }
             }
         }
 
@@ -158,6 +172,7 @@ class KotlinToJSTranslator(
 
         if (!koreCompileSettings.perModuleOutput) {
             val entry = redirectOutput((jsDirectory / entryName).readText().withMainArgumentsIr(arguments))
+            KoreProgress.emit("output", "chunks" to 1, "bytes" to entry.length)
             return JsTranslationOutput(entry = entry, files = null)
         }
 
@@ -165,6 +180,9 @@ class KotlinToJSTranslator(
         val entry = chunks[entryName]?.withMainArgumentsIr(arguments)
             ?: error("Second phase produced no $entryName in $jsDirectory")
         chunks[entryName] = entry
+
+        // The caller cannot get this from `Content-Length`: the body is gzipped and it reads the decoded stream.
+        KoreProgress.emit("output", "chunks" to chunks.size, "bytes" to chunks.values.sumOf { it.length })
 
         return JsTranslationOutput(entry = entry, files = orderChunks(chunks))
     }
