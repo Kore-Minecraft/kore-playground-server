@@ -144,14 +144,14 @@ dependencies {
     kotlinJsDependency(libs.kotlin.dom.api.compat)
 
     // Kore playground: transitive, so knbt / kotlinx-io / kotlinx-serialization JS klibs come along.
-    kotlinJsDependency("io.github.ayfri.kore:kore:2.13.1-26.2")
-    kotlinJsDependency("io.github.ayfri.kore:oop:2.13.1-26.2")
-    kotlinJsDependency("io.github.ayfri.kore:helpers:2.13.1-26.2")
+    kotlinJsDependency("io.github.ayfri.kore:kore:2.14.0-26.2")
+    kotlinJsDependency("io.github.ayfri.kore:oop:2.14.0-26.2")
+    kotlinJsDependency("io.github.ayfri.kore:helpers:2.14.0-26.2")
 
     // Kore playground: the same libraries as JVM jars, so `/api/compiler/highlight` resolves Kore in ~0.5 s.
-    koreJvmDependency("io.github.ayfri.kore:kore:2.13.1-26.2")
-    koreJvmDependency("io.github.ayfri.kore:oop:2.13.1-26.2")
-    koreJvmDependency("io.github.ayfri.kore:helpers:2.13.1-26.2")
+    koreJvmDependency("io.github.ayfri.kore:kore:2.14.0-26.2")
+    koreJvmDependency("io.github.ayfri.kore:oop:2.14.0-26.2")
+    koreJvmDependency("io.github.ayfri.kore:helpers:2.14.0-26.2")
 
     kotlinWasmDependency(libs.kotlin.stdlib.wasm.js)
 
