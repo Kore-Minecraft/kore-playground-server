@@ -1,12 +1,7 @@
 #!/bin/sh
-# Starts the compile backend, then warms its JIT with a few compiles.
-#
-# Memory is deliberately small: a cached JS compile is single-threaded and fits in 1 GB, and a serial GC
-# beats a parallel one when the container only ever holds one core. -Xss matters, the compiler recurses deep.
-#
-# The IR cache ships trained, but a fresh JVM still runs the compiler cold: its first compile takes about twice
-# as long as the third. Compiling the requests train.sh left in warmup/ pays that before a visitor does, and the
-# compile queue keeps a visitor arriving meanwhile in line behind them. KORE_WARMUP=false skips it.
+# Starts the compile backend, then warms the JS compile and the /highlight JVM type-check with train.sh's warmup/
+# requests, since a cold JVM's first compiles take twice as long. KORE_WARMUP=false skips it.
+# -Xmx512m peaks at ~960 MiB of container memory; -Xss matters, the compiler recurses deep.
 set -eu
 
 APP="${APP:-/kotlin-compiler-server}"
@@ -19,7 +14,7 @@ cd "$APP"
 
 java \
 	${AOT} \
-	${JAVA_OPTS:--Xmx1g -XX:MaxMetaspaceSize=512m -Xss16m -XX:+UseSerialGC} \
+	${JAVA_OPTS:--Xmx512m -XX:MaxMetaspaceSize=512m -Xss16m -XX:+UseSerialGC} \
 	-Dserver.port="$PORT" \
 	"@$APP/jvm.args" \
 	com.compiler.server.CompilerApplicationKt &
@@ -36,6 +31,8 @@ if [ "${KORE_WARMUP:-true}" = "true" ] && [ -d "$APP/warmup" ]; then
 
 		for request in "$APP"/warmup/*.json; do
 			curl -sf -o /dev/null -X POST "http://127.0.0.1:$PORT/api/compiler/translate/js" \
+				-H 'Content-Type: application/json' --data-binary "@$request" || true
+			curl -sf -o /dev/null -X POST "http://127.0.0.1:$PORT/api/compiler/highlight" \
 				-H 'Content-Type: application/json' --data-binary "@$request" || true
 		done
 		echo "warmup: JIT warmed"
