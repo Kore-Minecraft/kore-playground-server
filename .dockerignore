@@ -7,6 +7,10 @@ build
 !build/libs
 logs
 out
+# A local server run's IR cache; the image only reads ir-cache-seed.
+ir-cache
+ir-cache-anchor
+ir-cache-snippet
 kotlin-js-store
 */build
 */*/build
