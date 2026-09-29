@@ -35,7 +35,7 @@ A full queue answers 429 with `Retry-After` on the plain endpoints and `busy` on
 
 ## Cost
 
-Kotlin 2.4.20, Kore 2.14.0-26.2, warm JVM, client sending the hashes it holds, medians of 8-20 compiles:
+Kotlin 2.4.20, Kore 2.15.0-26.2, warm JVM, client sending the hashes it holds, medians of 8-20 compiles:
 
 | Compile | 12-core desktop | one core |
 |---|---|---|

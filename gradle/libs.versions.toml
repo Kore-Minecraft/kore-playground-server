@@ -28,7 +28,7 @@ compose-material3 = "1.9.0"
 gradle-develocity = "3.17.5"
 mockito = "6.2.3"
 # Kore playground, see README-KORE.md.
-kore = "2.14.0-26.2"
+kore = "2.15.0-26.2"
 
 [libraries]
 kotlin-reflect = { group = "org.jetbrains.kotlin", name = "kotlin-reflect", version.ref = "kotlin" }
