@@ -9,8 +9,8 @@ import kotlin.io.path.createDirectories
 /** Kore playground settings; with no `kore.js.cache-directory` the JS pipeline is upstream's. */
 @Component
 class KoreCompileSettings(
-    @param:Value("\${kore.js.cache-directory:}") cacheDirectory: String,
-    @param:Value("\${kore.js.anchor-directory:}") anchorSources: String,
+    @Value("\${kore.js.cache-directory:}") cacheDirectory: String,
+    @Value("\${kore.js.anchor-directory:}") anchorSources: String,
     @param:Value("\${kore.js.max-queued-compiles:8}") val maxQueuedCompiles: Int,
     @param:Value("\${kore.js.queue-timeout-seconds:120}") val queueTimeoutSeconds: Long,
     @param:Value("\${kore.diagnostics.max-concurrent:2}") val maxConcurrentDiagnostics: Int,

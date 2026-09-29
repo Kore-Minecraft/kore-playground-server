@@ -27,7 +27,7 @@ jobs:
         id: versions
         run: |
           kotlin=$(awk '{ if ($1 == "kotlin") { gsub(/"/, "", $2); print $2; } }' FS=' = ' ./gradle/libs.versions.toml)
-          kore=$(sed -n 's/^val koreVersion = "\(.*\)"$/\1/p' dependencies/build.gradle.kts)
+          kore=$(awk '{ if ($1 == "kore") { gsub(/"/, "", $2); print $2; exit } }' FS=' = ' ./gradle/libs.versions.toml)
           test -n "$kotlin" && test -n "$kore"
           echo "kotlin=$kotlin" >> "$GITHUB_OUTPUT"
           echo "kore=$kore" >> "$GITHUB_OUTPUT"
@@ -41,7 +41,7 @@ jobs:
 
       # On the host because a Docker layer cannot keep the Gradle caches between runs.
       - name: Build the server
-        run: ./gradlew :bootJar -Pkore.slim=true --build-cache
+        run: ./gradlew :bootJar
 
       # Seeds the training run with the previous build's IR cache; a Kotlin or Kore bump starts a new lineage.
       - name: Restore the trained IR cache

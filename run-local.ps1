@@ -14,7 +14,7 @@ $kotlinVersion = (Select-String -Path 'gradle/libs.versions.toml' -Pattern '^kot
 $jar = "build/libs/kotlin-compiler-server-$kotlinVersion-SNAPSHOT.jar"
 
 if ($Rebuild -or -not (Test-Path $jar)) {
-	& ./gradlew.bat :bootJar -Pkore.slim=true
+	& ./gradlew.bat :bootJar
 	if ($LASTEXITCODE -ne 0) { throw "bootJar failed with exit code $LASTEXITCODE" }
 }
 

@@ -27,6 +27,8 @@ compose = "1.9.3"
 compose-material3 = "1.9.0"
 gradle-develocity = "3.17.5"
 mockito = "6.2.3"
+# Kore playground, see README-KORE.md.
+kore = "2.14.0-26.2"
 
 [libraries]
 kotlin-reflect = { group = "org.jetbrains.kotlin", name = "kotlin-reflect", version.ref = "kotlin" }
@@ -95,6 +97,9 @@ aws-springboot-container = { group = "com.amazonaws.serverless", name = "aws-ser
 spring-context-indexer = { group = "org.springframework", name = "spring-context-indexer" }
 springdoc-webmvc = { group = "org.springdoc", name = "springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
 springdoc-webflux = { group = "org.springdoc", name = "springdoc-openapi-starter-webflux-ui", version.ref = "springdoc" }
+kore = { group = "io.github.ayfri.kore", name = "kore", version.ref = "kore" }
+kore-helpers = { group = "io.github.ayfri.kore", name = "helpers", version.ref = "kore" }
+kore-oop = { group = "io.github.ayfri.kore", name = "oop", version.ref = "kore" }
 
 
 [bundles]
@@ -113,6 +118,8 @@ compose = [
 testcontainers = [
     "testcontainers",
 ]
+
+kore = ["kore", "kore-helpers", "kore-oop"]
 
 [plugins]
 kotlin-plugin-spring = { id = "org.jetbrains.kotlin.plugin.spring", version.ref = "kotlin" }

@@ -6,7 +6,7 @@ kotlinVersion=$(awk '{ if ($1 == "kotlin") { gsub(/"/, "", $2); print $2; } }' F
 
 echo "Kotlin version for the docker: $kotlinVersion"
 
-./gradlew :bootJar -Pkore.slim=true --build-cache
+./gradlew :bootJar
 
 mkdir -p ir-cache-seed
 

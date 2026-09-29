@@ -15,7 +15,7 @@ snippet runs in the visitor's browser, so there is nothing to sandbox.
 | Every chunk returned in evaluation order with a hash, texts the caller holds left out | `KotlinToJSTranslator.kt`, `ExecutionResult.kt` |
 | One compile at a time with a bounded queue, a separate lane for `/highlight` | `kore/CompileGate.kt`, `KotlinProjectExecutor.kt` |
 | A streaming compile endpoint | `CompilerRestController.kt`, `kore/KoreProgress.kt` |
-| Slim mode (`-Pkore.slim=true`), dropping the Compose/wasm playground from the build | `build.gradle.kts`, `dependencies/build.gradle.kts` |
+| Slim mode (`kore.slim`, on in `gradle.properties` with the build cache), dropping the Compose/wasm playground from the build | `build.gradle.kts`, `dependencies/build.gradle.kts` |
 | An image with a trained IR cache and JDK AOT cache, warmed at boot | `Dockerfile`, `kore-prewarm/` |
 | One CI workflow building, smoke testing and deploying the image | `.github/workflows/kore-image.yml` |
 
@@ -82,6 +82,6 @@ bump is left out of the anchor with a warning.
 
 ## Keeping up with upstream
 
-`git fetch upstream && git merge upstream/master`, then bump `koreVersion` in `dependencies/build.gradle.kts`. Kotlin/JS
+`git fetch upstream && git merge upstream/master`, then bump `kore` in `gradle/libs.versions.toml`. Kotlin/JS
 klibs are stable across compiler versions, so Kore and the server's Kotlin do not have to match. The upstream patch
 surface is `KotlinToJSTranslator.doTranslateWithIr`, the controller and `KotlinProjectExecutor`.

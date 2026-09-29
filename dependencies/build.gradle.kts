@@ -9,9 +9,6 @@ plugins {
 /** Kore playground: slim mode keeps only the JVM and JS libraries, the two the compile backend serves. */
 val koreSlim = providers.gradleProperty("kore.slim").map(String::toBoolean).getOrElse(false)
 
-/** Kore playground: the Kore release on the compile classpaths, read by `.github/workflows/kore-image.yml`. */
-val koreVersion = "2.14.0-26.2"
-
 val kotlinDependency: Configuration by configurations.creating {
     isTransitive = false
 }
@@ -96,7 +93,8 @@ val copyDependencies by tasks.creating(Copy::class) {
 }
 
 /** Sync so a Kore bump drops the previous jars, preserving the rest of the folder `copyDependencies` fills. */
-val copyKoreJvmDependencies by tasks.creating(Sync::class) {
+val copyKoreJvmDependencies by tasks.registering(Sync::class) {
+    description = "Syncs the Kore JVM jars into the /highlight classpath."
     from(koreJvmDependency)
     into(libJVMFolder)
     preserve {
@@ -110,7 +108,7 @@ val copyCompilerPluginDependencies by tasks.creating(Copy::class) {
 }
 
 /** Sync so a Kore bump drops the previous klibs from the JS compile classpath. */
-val copyJSDependencies by tasks.creating(Sync::class) {
+val copyJSDependencies by tasks.registering(Sync::class) {
     from(kotlinJsDependency)
     into(libJSFolder)
 }
@@ -150,10 +148,8 @@ dependencies {
     kotlinJsDependency(libs.kotlin.dom.api.compat)
 
     /** Kore playground: JS klibs for the compile, with their transitive klibs, and JVM jars for `/highlight`. */
-    for (artifact in listOf("helpers", "kore", "oop")) {
-        kotlinJsDependency("io.github.ayfri.kore:$artifact:$koreVersion")
-        koreJvmDependency("io.github.ayfri.kore:$artifact:$koreVersion")
-    }
+    kotlinJsDependency(libs.bundles.kore)
+    koreJvmDependency(libs.bundles.kore)
 
     kotlinWasmDependency(libs.kotlin.stdlib.wasm.js)
 
