@@ -92,9 +92,14 @@ val copyDependencies by tasks.creating(Copy::class) {
     into(libJVMFolder)
 }
 
-val copyKoreJvmDependencies by tasks.creating(Copy::class) {
+// Sync, not Copy, so a Kore bump drops the previous jars from the highlight classpath; the folder is shared with
+// copyDependencies, hence everything but Kore's own jars is preserved.
+val copyKoreJvmDependencies by tasks.creating(Sync::class) {
     from(koreJvmDependency)
     into(libJVMFolder)
+    preserve {
+        exclude("kore-jvm-*.jar", "oop-jvm-*.jar", "helpers-jvm-*.jar")
+    }
 }
 
 val copyCompilerPluginDependencies by tasks.creating(Copy::class) {

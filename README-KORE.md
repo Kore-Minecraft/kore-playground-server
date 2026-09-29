@@ -21,7 +21,7 @@ maintain and no runaway process to kill: the only server-side cost is bounded co
 | A streaming compile endpoint reporting queue position, compiler phase and output size as they happen | `CompilerRestController.kt`, `kore/KoreProgress.kt` |
 | Prewarmed IR cache and JDK AOT cache built into the image, and the JIT warmed at boot | `Dockerfile`, `kore-prewarm/` |
 | Slim mode, dropping the Compose/wasm playground from the build | `build.gradle.kts`, `dependencies/build.gradle.kts` |
-| The JS klib folder synced rather than copied, so an old Kore klib cannot linger on the classpath | `dependencies/build.gradle.kts` |
+| Kore's JS klibs and JVM jars synced rather than copied, so an old Kore version cannot linger on either classpath | `dependencies/build.gradle.kts` |
 | Upstream CI replaced by a single image build, a smoke test and three caches | `.github/workflows/kore-image.yml` |
 
 Everything else is upstream, and upstream's own JS pipeline is untouched when the cache is off.
