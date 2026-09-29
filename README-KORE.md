@@ -64,7 +64,8 @@ and the anchor take one writer each, hence the single-flight queue and no shared
 ## Building and running
 
 - **CI** builds on every push to `master`, smoke tests at `--cpus 1.0 --memory 1200m`, pushes
-  `ghcr.io/kore-minecraft/kore-playground-server:{latest,kore-<version>,<sha>}`, then calls `DOKPLOY_DEPLOY_HOOK`.
+  `ghcr.io/kore-minecraft/kore-playground-server:{latest,kore-<version>,<sha>}`, then calls the `DOKPLOY_DEPLOY_HOOK`
+  secret when set, Dokploy's webhook URL from the application's Deployments tab.
 - **Locally**, `./docker-image-build.sh` builds `kore-playground-server:local`.
 - **Without Docker**, `./run-local.ps1` (or `.sh`) serves on 8090, then point the site at it with
   `kore.playgroundApiUrl=http://localhost:8090` in `~/.gradle/gradle.properties`.

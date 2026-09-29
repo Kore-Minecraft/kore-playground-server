@@ -127,4 +127,6 @@ jobs:
 
       - name: Tell Dokploy to pull the new image
         if: github.ref == 'refs/heads/master'
-        run: curl -sf -X POST "${{ secrets.DOKPLOY_DEPLOY_HOOK }}"
+        env:
+          HOOK: ${{ secrets.DOKPLOY_DEPLOY_HOOK }}
+        run: '[ -z "$HOOK" ] || curl -sf -X POST "$HOOK"'
