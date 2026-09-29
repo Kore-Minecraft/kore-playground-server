@@ -104,6 +104,8 @@ fun Project.generateProperties(
     "kore.js.queue-timeout-seconds" to "\${KORE_JS_QUEUE_TIMEOUT_SECONDS:120}",
     // The streaming compile is an async request, cut at Tomcat's 30 s default: past the queue wait plus a cold compile.
     "spring.mvc.async.request-timeout" to "300s",
+    // Streamed compiles run on this pool; at Spring's 8 threads the rest waited in its unbounded queue, out of CompileGate's sight.
+    "spring.task.execution.pool.core-size" to "32",
 )
 
 fun MapProperty<String, String>.fillProperties(
