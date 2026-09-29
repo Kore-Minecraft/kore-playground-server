@@ -63,12 +63,7 @@ abstract class TranslationResultWithJsCode(
   exception: ExceptionDescriptor?
 ) : ExecutionResult(compilerDiagnostics, exception)
 
-/**
- * One emitted JS chunk. Only present under per-module output, see `KoreCompileSettings`.
- *
- * [text] is `null` when the caller said it already holds [hash]: most chunks are identical from one compile to
- * the next, so a client keeping them by hash only downloads what changed.
- */
+/** One per-module JS chunk, [text] left `null` when the caller already holds [hash]. */
 data class JsFile(
   val name: String,
   val hash: String,
@@ -80,16 +75,10 @@ data class TranslationJSResult(
   override var exception: ExceptionDescriptor? = null,
   @field:JsonProperty("errors")
   override var compilerDiagnostics: CompilerDiagnostics = CompilerDiagnostics(),
-  /**
-   * Every chunk of a per-module compile, in evaluation order, or `null` for the single-bundle pipeline.
-   *
-   * [jsCode] still carries the entry chunk in both modes, so a client that only knows `jsCode` keeps
-   * working - it just needs the chunks too before that entry can run.
-   */
+  /** Every per-module chunk in evaluation order, `null` for upstream's single bundle; [jsCode] is the entry chunk either way. */
   @field:JsonInclude(JsonInclude.Include.NON_NULL)
   val jsFiles: List<JsFile>? = null,
 ) : TranslationResultWithJsCode(jsCode, compilerDiagnostics, exception) {
-  /** Drops the text of every chunk whose hash is in [known]. */
   fun withoutKnownChunks(known: Set<String>) = when {
     known.isEmpty() || jsFiles == null -> this
     else -> copy(jsFiles = jsFiles.map { if (it.hash in known) it.copy(text = null) else it })

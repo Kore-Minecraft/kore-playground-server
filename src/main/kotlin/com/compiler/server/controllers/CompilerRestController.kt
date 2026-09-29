@@ -7,6 +7,7 @@ import com.compiler.server.api.TranslateComposeWasmRequest
 import com.compiler.server.api.TranslateJsRequest
 import com.compiler.server.api.TranslateWasmRequest
 import com.compiler.server.kore.CompileBusyException
+import com.compiler.server.kore.CompileEvent
 import com.compiler.server.kore.KoreProgress
 import com.compiler.server.model.CompilerDiagnostics
 import com.compiler.server.model.ExecutionResult
@@ -96,18 +97,7 @@ class CompilerRestController(
         return (this as? TranslationJSResult)?.withoutKnownChunks(hashes) ?: this
     }
 
-    /**
-     * Same compile as `/translate/js`, reported as it happens.
-     *
-     * The body is newline-delimited JSON: every line but the last is a progress event - queue position,
-     * compiler phase, the size of the output about to be sent - and the last one carries the very same
-     * result object the plain endpoint returns, under `result`. A caller that reads the stream can name
-     * what it is waiting on for 6-35 s instead of showing an anonymous spinner.
-     *
-     * NDJSON rather than server-sent events so the payload stays on a compressed content type: SSE is
-     * `text/event-stream`, which Tomcat will not gzip, and the result alone is ~16 MB raw against 1.7 MB
-     * gzipped.
-     */
+    /** Same compile as `/translate/js` as [CompileEvent] lines, NDJSON rather than SSE since Tomcat never gzips `text/event-stream`. */
     @PostMapping("/translate/js/stream", produces = [NDJSON_CONTENT_TYPE])
     fun translateJsStreaming(
         @RequestBody @Valid request: TranslateJsRequest,
@@ -120,36 +110,31 @@ class CompilerRestController(
         )
 
         val body = StreamingResponseBody { output ->
-            fun write(line: Map<String, Any?>) {
-                output.write(objectMapper.writeValueAsBytes(line))
+            fun write(event: CompileEvent) {
+                output.write(objectMapper.writeValueAsBytes(event))
                 output.write(NEW_LINE)
                 output.flush()
             }
 
             try {
-                val result = KoreProgress.reportingTo({ progress -> write(mapOf("event" to progress.event) + progress.detail) }) {
-                    kotlinProjectExecutor.convertToJsIr(project)
-                }.withoutKnownChunks(known)
+                val result = KoreProgress.reportingTo(::write) { kotlinProjectExecutor.convertToJsIr(project) }.withoutKnownChunks(known)
 
-                // The caller cannot get this from `Content-Length`: the body is gzipped and it reads the decoded stream.
+                /** The decoded size, which a browser reading the gzipped body cannot get from `Content-Length`. */
                 val sent = (result as? TranslationJSResult)?.jsFiles?.mapNotNull { it.text } ?: listOfNotNull(result.jsCode)
                 val reused = (result as? TranslationJSResult)?.jsFiles?.count { it.text == null } ?: 0
-                if (sent.isNotEmpty() || reused > 0) {
-                    write(mapOf("event" to "output", "chunks" to sent.size, "reused" to reused, "bytes" to sent.sumOf { it.length }))
-                }
+                if (sent.isNotEmpty() || reused > 0) write(CompileEvent.Output(sent.size, reused, sent.sumOf { it.length }))
 
-                write(mapOf("event" to "result", "result" to result))
+                write(CompileEvent.Result(result))
             } catch (busy: CompileBusyException) {
-                write(mapOf("event" to "busy", "message" to busy.message, "retryAfterSeconds" to busy.retryAfterSeconds))
+                write(CompileEvent.Busy(busy.message, busy.retryAfterSeconds))
             } catch (failure: Exception) {
                 log.warn("Streaming compile failed", failure)
-                write(mapOf("event" to "error", "message" to (failure.message ?: failure::class.java.simpleName)))
+                write(CompileEvent.Failed(failure.message ?: failure::class.java.simpleName))
             }
         }
 
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_TYPE, NDJSON_CONTENT_TYPE)
-            // Nothing between here and the browser may buffer the stream, or the progress arrives with the result.
             .header(HttpHeaders.CACHE_CONTROL, "no-cache, no-transform")
             .header("X-Accel-Buffering", "no")
             .body(body)

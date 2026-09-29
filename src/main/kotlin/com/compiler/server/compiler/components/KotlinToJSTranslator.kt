@@ -2,6 +2,7 @@ package com.compiler.server.compiler.components
 
 import com.compiler.server.common.components.KotlinEnvironment
 import com.compiler.server.common.components.usingTempDirectory
+import com.compiler.server.kore.CompileEvent
 import com.compiler.server.kore.KoreCompileSettings
 import com.compiler.server.kore.KoreProgress
 import com.compiler.server.model.*
@@ -11,11 +12,11 @@ import org.jetbrains.kotlin.cli.js.K2JSCompiler
 import org.jetbrains.kotlin.cli.js.KotlinWasmCompiler
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import kotlin.io.encoding.Base64
 import java.io.File
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.HexFormat
+import kotlin.io.encoding.Base64
 import kotlin.io.path.createDirectories
 import kotlin.io.path.div
 import kotlin.io.path.exists
@@ -61,20 +62,7 @@ class KotlinToJSTranslator(
         private val log = LoggerFactory.getLogger(KotlinToJSTranslator::class.java)
     }
 
-    /**
-     * A klib built from [KoreCompileSettings.anchorSources], linked into every compile as one more library.
-     *
-     * The IR cache exports from each library exactly what other modules use, so a snippet touching another part of
-     * Kore than the previous one made it re-lower those Kore files and regenerate all of `Kore-kore.js`: ~11 s for
-     * switching between two examples. This module keeps using everything the examples use, so switching between
-     * them leaves Kore untouched, ~3 s.
-     *
-     * The linker only loads what something reaches in a library, so each snippet's `playground()` is called from a
-     * `@JsExport` function, a root it always keeps. That also makes the entry chunk import the anchor's, so it ships
-     * like any library chunk: ~50 kB that never change, downloaded once by a client keeping chunks by hash. Built by
-     * the first compile, inside the compile gate. Sources that stopped compiling, typically after a Kore bump, are
-     * left out with a warning instead of failing every compile.
-     */
+    /** The prewarm snippets as a library in every compile, each behind a `@JsExport` root, so Kore's exports stop following the snippet. */
     private val anchorKlib: String? by lazy {
         val workspace = koreCompileSettings.anchorDirectory ?: return@lazy null
         val sources = koreCompileSettings.anchorSources?.takeIf { it.isDirectory() }?.listDirectoryEntries("*.kt")?.sorted()
@@ -177,8 +165,7 @@ class KotlinToJSTranslator(
         val workspace = koreCompileSettings.snippetDirectory
             ?: return usingTempDirectory { translateWithIrIn(it, files, arguments, userCompilerArguments) }.requireOutput()
 
-        // The IR cache writes nothing for an unchanged program, trusting the previous output to still be in `js/`.
-        // When it is gone, one compile as a module of its own rewrites every chunk.
+        /** The IR cache writes nothing for an unchanged program; when the kept `js/` output is gone, a temp module rewrites it all. */
         val result = translateWithIrIn(workspace, files, arguments, userCompilerArguments)
         if (result !is Compiled || result.result != null) return result.requireOutput()
 
@@ -188,12 +175,7 @@ class KotlinToJSTranslator(
     private fun CompilationResult<JsTranslationOutput?>.requireOutput() =
         map { it ?: error("Second phase produced no $JS_DEFAULT_MODULE_NAME.js") }
 
-    /**
-     * Compiles [files] inside [directory]: sources in `src/`, klib in `klib/`, JavaScript in `js/`, which is kept.
-     *
-     * The output is `null` when the second phase wrote no entry chunk, which the IR cache does for a program it
-     * considers already built.
-     */
+    /** Compiles [files] into [directory]'s `src/`, `klib/` and kept `js/`, `null` output meaning the IR cache found nothing to rebuild. */
     private fun translateWithIrIn(
         directory: Path,
         files: List<ProjectFile>,
@@ -219,11 +201,11 @@ class KotlinToJSTranslator(
             return ((now - phaseStartedAt) / 1_000_000).also { phaseStartedAt = now }
         }
 
-        KoreProgress.emit("phase", "name" to "klib")
+        KoreProgress.emit(CompileEvent.Phase("klib"))
 
         return jsCompiler.tryCompilation(inputDir, ioFiles, filePaths + additionalCompilerArgumentsForKLib)
             .flatMap {
-                KoreProgress.emit("phase", "name" to "js", "previousMs" to phaseMs())
+                KoreProgress.emit(CompileEvent.Phase("js", phaseMs()))
                 val anchor = anchorKlib
                 val secondPhaseArguments =
                     compilerArgumentsUtil.convertCompilerArgumentsToCompilationString(
@@ -239,22 +221,15 @@ class KotlinToJSTranslator(
                 )
             }
             .map {
-                KoreProgress.emit("phase", "name" to "collect", "previousMs" to phaseMs())
+                KoreProgress.emit(CompileEvent.Phase("collect", phaseMs()))
                 val entry = jsDirectory / "$JS_DEFAULT_MODULE_NAME.js"
-                // An unchanged program comes out of the IR cache named after its klib instead of `-ir-output-name`.
+                /** An unchanged program comes out of the IR cache named after its klib instead of `-ir-output-name`. */
                 (jsDirectory / "kotlin_$JS_DEFAULT_MODULE_NAME.js").takeIf { it.exists() }?.moveTo(entry, overwrite = true)
                 if (entry.exists()) readJsOutput(jsDirectory, arguments) else null
             }
     }
 
-    /**
-     * Collects the second phase output.
-     *
-     * Upstream emits a single DCE'd bundle, which stays the default. Under the IR build cache the compiler
-     * emits one UMD chunk per module instead, and all of them are returned so a browser can evaluate them
-     * itself - the ten library chunks are identical between two unrelated snippets and cache cleanly, while
-     * only `Kore-kore.js` and `playground.js` genuinely change.
-     */
+    /** Upstream's single DCE'd bundle, or under the IR cache every per-module UMD chunk in evaluation order. */
     private fun readJsOutput(jsDirectory: Path, arguments: List<String>): JsTranslationOutput {
         val entryName = "$JS_DEFAULT_MODULE_NAME.js"
 
@@ -271,16 +246,7 @@ class KotlinToJSTranslator(
         return JsTranslationOutput(entry = entry, files = orderChunks(chunks))
     }
 
-    /** 128 bits of SHA-256, plenty to tell a dozen chunks apart across compiles. */
-    private fun hashOf(text: String): String =
-        HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.toByteArray()), 0, 16)
-
-    /**
-     * Sorts the per-module chunks so a plain loader can evaluate them top to bottom.
-     *
-     * Each chunk is UMD and names what it needs in its `require('./x.js')` preamble, so a depth-first walk
-     * over those references is enough - no bundler and no module system on the browser side.
-     */
+    /** Depth-first over each UMD chunk's `require('./x.js')` preamble, so a plain loader evaluates them top to bottom. */
     private fun orderChunks(chunks: Map<String, String>): List<JsFile> {
         val ordered = linkedMapOf<String, String>()
         val visiting = mutableSetOf<String>()
@@ -298,7 +264,8 @@ class KotlinToJSTranslator(
         }
 
         chunks.keys.sorted().forEach(::visit)
-        return ordered.map { JsFile(name = it.key, hash = hashOf(it.value), text = it.value) }
+        val sha256 = MessageDigest.getInstance("SHA-256")
+        return ordered.map { (name, text) -> JsFile(name, HexFormat.of().formatHex(sha256.digest(text.toByteArray()), 0, 16), text) }
     }
 
     private fun redirectOutput(code: String): String {

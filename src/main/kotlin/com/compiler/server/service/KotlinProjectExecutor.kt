@@ -69,8 +69,7 @@ class KotlinProjectExecutor(
 
     fun highlight(project: Project): CompilerDiagnostics = try {
         when (project.confType) {
-            // Its own lane: a JVM pass never reaches `CompileGate`, and an editor typing at it would
-            // otherwise run unbounded next to the compile the page actually needs.
+            /** Its own lane, so an editor typing at it cannot starve the compile. */
             ProjectType.JAVA, ProjectType.JUNIT ->
                 compileGate.diagnostics { compileToJvm(project).compilerDiagnostics }
 
@@ -97,7 +96,7 @@ class KotlinProjectExecutor(
         project: Project,
         converter: (List<ProjectFile>, List<String>, JsCompilerArguments) -> CompilationResult<JsTranslationOutput>
     ): TranslationJSResult {
-        // Outside `synchronize`: that monitor already serializes compiles, but queues on it without bound.
+        /** Outside `synchronize`, whose monitor queues callers without bound. */
         return compileGate.singleFlight {
             environment.synchronize {
                 kotlinToJSTranslator.translateJs(
