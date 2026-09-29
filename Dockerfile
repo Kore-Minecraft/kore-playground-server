@@ -52,6 +52,9 @@ COPY --from=prewarm /kotlin-compiler-server/ir-cache /
 
 FROM amazoncorretto:25-al2023
 
+# Links the GHCR package to this repository.
+LABEL org.opencontainers.image.source="https://github.com/Kore-Minecraft/kore-playground-server"
+
 # For the health check and the boot warmup.
 RUN dnf install -y curl-minimal && dnf clean all
 
