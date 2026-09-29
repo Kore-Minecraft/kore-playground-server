@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
 
     environment:
-      ACCESS_CONTROL_ALLOW_ORIGIN_VALUE: "https://kore.ayfri.com"
+      ACCESS_CONTROL_ALLOW_ORIGIN_VALUE: "https://kore.ayfri.com,http://localhost:[*]"
 
     deploy:
       replicas: 1

@@ -15,6 +15,7 @@ snippet runs in the visitor's browser, so there is nothing to sandbox.
 | Every chunk returned in evaluation order with a hash, texts the caller holds left out | `KotlinToJSTranslator.kt`, `ExecutionResult.kt` |
 | One compile at a time with a bounded queue, a separate lane for `/highlight` | `kore/CompileGate.kt`, `KotlinProjectExecutor.kt` |
 | A streaming compile endpoint | `CompilerRestController.kt`, `kore/KoreProgress.kt` |
+| `ACCESS_CONTROL_ALLOW_ORIGIN_VALUE` read as comma-separated origin patterns | `configuration/CorsConfiguration.kt` |
 | Slim mode (`kore.slim`, on in `gradle.properties` with the build cache), dropping the Compose/wasm playground from the build | `build.gradle.kts`, `dependencies/build.gradle.kts` |
 | An image with a trained IR cache and JDK AOT cache, warmed at boot | `Dockerfile`, `kore-prewarm/` |
 | One CI workflow building, smoke testing and deploying the image | `.github/workflows/kore-image.yml` |
@@ -57,7 +58,7 @@ and the anchor take one writer each, hence the single-flight queue and no shared
 | `kore.js.max-queued-compiles` | `KORE_JS_MAX_QUEUED_COMPILES` | 8, the running compile included |
 | `kore.js.queue-timeout-seconds` | `KORE_JS_QUEUE_TIMEOUT_SECONDS` | 120 |
 | `kore.diagnostics.max-concurrent` | - | 2, with a queue of 8 |
-| - | `ACCESS_CONTROL_ALLOW_ORIGIN_VALUE` | `*` |
+| - | `ACCESS_CONTROL_ALLOW_ORIGIN_VALUE` | `*`, comma-separated origin patterns (`https://kore.ayfri.com,http://localhost:[*]` deployed) |
 | - | `JAVA_OPTS` | `-Xmx512m -XX:MaxMetaspaceSize=512m -Xss16m -XX:+UseSerialGC` |
 | - | `KORE_WARMUP` | `true`, compiles and type-checks three snippets at boot |
 
@@ -68,7 +69,8 @@ and the anchor take one writer each, hence the single-flight queue and no shared
   secret when set, Dokploy's webhook URL from the application's Deployments tab.
 - **Locally**, `./docker-image-build.sh` builds `kore-playground-server:local`.
 - **Without Docker**, `./run-local.ps1` (or `.sh`) serves on 8090, then point the site at it with
-  `kore.playgroundApiUrl=http://localhost:8090` in `~/.gradle/gradle.properties`.
+  `kore.playgroundApiUrl=http://localhost:8090` in `~/.gradle/gradle.properties`. A local site can also use the deployed
+  server, `kore.playgroundApiUrl=https://play-api.kore.ayfri.com`, since it allows `localhost` origins.
 
 `kore-prewarm/snippets/` is the prewarm set and the anchor: `site-*.kt` copy the site's examples from
 `website/playground-examples` in the Kore repository, keep them in sync. A snippet that stops compiling after a Kore
@@ -84,4 +86,4 @@ bump is left out of the anchor with a warning.
 
 `git fetch upstream && git merge upstream/master`, then bump `kore` in `gradle/libs.versions.toml`. Kotlin/JS
 klibs are stable across compiler versions, so Kore and the server's Kotlin do not have to match. The upstream patch
-surface is `KotlinToJSTranslator.doTranslateWithIr`, the controller and `KotlinProjectExecutor`.
+surface is `KotlinToJSTranslator.doTranslateWithIr`, the controller, `KotlinProjectExecutor` and `CorsConfiguration`.

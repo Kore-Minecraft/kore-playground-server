@@ -6,6 +6,7 @@ import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 import org.springframework.web.filter.CorsFilter
 
+/** Comma-separated origin patterns, e.g. `https://kore.ayfri.com,http://localhost:[*]`. */
 val ACCESS_CONTROL_ALLOW_ORIGIN_VALUE: String = System.getenv("ACCESS_CONTROL_ALLOW_ORIGIN_VALUE") ?: "*"
 val ACCESS_CONTROL_ALLOW_HEADER_VALUE: String = System.getenv("ACCESS_CONTROL_ALLOW_HEADER_VALUE") ?: "*"
 
@@ -16,7 +17,7 @@ class CorsConfiguration {
     val source = UrlBasedCorsConfigurationSource()
     val config = CorsConfiguration().apply {
       addAllowedHeader(ACCESS_CONTROL_ALLOW_HEADER_VALUE)
-      addAllowedOrigin(ACCESS_CONTROL_ALLOW_ORIGIN_VALUE)
+      ACCESS_CONTROL_ALLOW_ORIGIN_VALUE.split(',').forEach { addAllowedOriginPattern(it.trim()) }
       addAllowedMethod("GET")
       addAllowedMethod("POST")
     }
