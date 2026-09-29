@@ -120,9 +120,15 @@ number of chunks actually sent, how many the caller already had, and the uncompr
 the one number a browser cannot get from `Content-Length`: the body is gzipped and `fetch` hands the decoded
 stream to the reader.
 
+The status line is sent before the compile starts, so the stream is always a 200: a full queue ends it with
+`{"event":"busy","message":…,"retryAfterSeconds":10}` instead of a 429, and a server failure with
+`{"event":"error","message":…}`.
+
 The endpoint is an async request, so `spring.mvc.async.request-timeout` is 300 s: Tomcat's 30 s default cut
 every stream longer than that, a cold compile or a long queue, and the client then paid a second compile
-through the plain endpoint.
+through the plain endpoint. Streams run on Spring's task pool, sized to 32 threads
+(`spring.task.execution.pool.core-size`): at its default 8, a burst waited in the pool's unbounded queue where
+`CompileGate` could neither see nor refuse it.
 
 NDJSON rather than server-sent events, because `text/event-stream` is not in `server.compression.mime-types`
 and never would be gzipped. `application/x-ndjson` is in that list, and Tomcat flushes each line through the
