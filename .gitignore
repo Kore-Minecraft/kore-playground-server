@@ -45,6 +45,7 @@ kotlin-lsp/
 # Kore playground: the IR cache CI seeds the image with, see .github/workflows/kore-image.yml.
 ir-cache-seed/
 
-# Kore playground: the IR cache a local server run fills and the snippet klib next to it, see README-KORE.md.
+# Kore playground: the IR cache a local server run fills and the anchor and snippet builds next to it, see README-KORE.md.
 ir-cache/
+ir-cache-anchor/
 ir-cache-snippet/
