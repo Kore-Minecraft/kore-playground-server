@@ -1,14 +1,6 @@
-# Kore playground compile backend: upstream kotlin-compiler-server plus Kore's JS klibs, a prewarmed
-# Kotlin/JS IR build cache and a JDK AOT cache. See README-KORE.md.
-#
-# The Gradle build runs outside this file - docker-image-build.sh locally, the workflow in CI - because a
-# Docker layer cannot hold the Gradle dependency and build caches between runs, and re-resolving them is
-# most of a cold build. The context must therefore already carry the boot jar and the two klib folders:
-#
-#   build/libs/kotlin-compiler-server-<KOTLIN_VERSION>-SNAPSHOT.jar
-#   <KOTLIN_VERSION>/        JVM klibs
-#   <KOTLIN_VERSION>-js/     JS klibs, Kore included
-#   ir-cache-seed/           IR cache from a previous build, or empty
+# Kore playground compile backend with a trained IR cache and JDK AOT cache, see README-KORE.md.
+# Gradle runs on the host (docker-image-build.sh or CI): the context carries the boot jar, the <KOTLIN_VERSION>
+# and <KOTLIN_VERSION>-js library folders, and ir-cache-seed/ (a previous build's IR cache, or empty).
 
 FROM amazoncorretto:25-al2023 AS assemble
 
@@ -25,7 +17,6 @@ RUN jar -xf boot.jar && rm boot.jar
 RUN cd BOOT-INF/classes && jar -cf /staging/app.jar . && rm -rf /staging/BOOT-INF/classes
 
 
-# Assembles the runtime layout, then trains both caches against the real server on the real endpoint.
 FROM amazoncorretto:25-al2023 AS prewarm
 
 ARG KOTLIN_VERSION
@@ -42,11 +33,7 @@ COPY --from=assemble /staging/app.jar /kotlin-compiler-server/app.jar
 COPY ${KOTLIN_VERSION} /kotlin-compiler-server/${KOTLIN_VERSION}
 COPY ${KOTLIN_VERSION}-js /kotlin-compiler-server/${KOTLIN_VERSION}-js
 COPY kore-prewarm /kore-prewarm
-# The prewarm snippets double as the anchor module, see KotlinToJSTranslator.anchorKlib.
 COPY kore-prewarm/snippets /kotlin-compiler-server/anchor
-
-# A cache from a previous build, so the training run pays for lowerings nobody has reached yet rather than
-# for all of them. Empty on a fresh checkout, which only makes the training run slower.
 COPY ir-cache-seed /kotlin-compiler-server/ir-cache
 
 RUN /kore-prewarm/classpath.sh
@@ -57,7 +44,7 @@ ENV KORE_JS_ANCHOR_DIRECTORY=/kotlin-compiler-server/anchor
 RUN /kore-prewarm/train.sh
 
 
-# Carries nothing but the trained IR cache, so CI can pull it back out and seed the next build with it.
+# The trained IR cache alone, which CI exports to seed the next build.
 FROM scratch AS ir-cache-export
 
 COPY --from=prewarm /kotlin-compiler-server/ir-cache /
@@ -65,7 +52,7 @@ COPY --from=prewarm /kotlin-compiler-server/ir-cache /
 
 FROM amazoncorretto:25-al2023
 
-# Only for the container health check; the server itself needs nothing beyond the JDK.
+# For the health check and the boot warmup.
 RUN dnf install -y curl-minimal && dnf clean all
 
 WORKDIR /kotlin-compiler-server

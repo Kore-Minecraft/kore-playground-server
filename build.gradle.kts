@@ -8,8 +8,7 @@ version = "${libs.versions.kotlin.get()}-SNAPSHOT"
 
 val propertyFile = "application.properties"
 
-// Kore playground: the Compose/wasm playground is dead weight for a Kotlin/JS compile backend, and building
-// it drags in skiko, binaryen, node and an npm install. Slim mode skips that whole chain. See README-KORE.md.
+/** Kore playground: skips the Compose/wasm playground and its skiko, binaryen, node and npm chain. */
 val koreSlim = providers.gradleProperty("kore.slim").map(String::toBoolean).getOrElse(false)
 
 plugins {
@@ -97,14 +96,14 @@ fun Project.generateProperties(
     "server.compression.enabled" to "true",
     "server.compression.mime-types" to "application/json,application/x-ndjson,text/javascript,application/wasm",
     "springdoc.swagger-ui.path" to "/api-docs/swagger-ui.html",
-    // Kore playground, see README-KORE.md. An empty cache directory keeps the upstream JS pipeline.
+    /** Kore playground, see README-KORE.md. */
     "kore.js.cache-directory" to "\${KORE_JS_CACHE_DIRECTORY:}",
     "kore.js.anchor-directory" to "\${KORE_JS_ANCHOR_DIRECTORY:}",
     "kore.js.max-queued-compiles" to "\${KORE_JS_MAX_QUEUED_COMPILES:8}",
     "kore.js.queue-timeout-seconds" to "\${KORE_JS_QUEUE_TIMEOUT_SECONDS:120}",
-    // The streaming compile is an async request, cut at Tomcat's 30 s default: past the queue wait plus a cold compile.
+    /** Tomcat's 30 s default cut streams longer than a queue wait plus a cold compile. */
     "spring.mvc.async.request-timeout" to "300s",
-    // Streamed compiles run on this pool; at Spring's 8 threads the rest waited in its unbounded queue, out of CompileGate's sight.
+    /** Streams run on this pool; at Spring's 8 threads a burst queued there, out of `CompileGate`'s sight. */
     "spring.task.execution.pool.core-size" to "32",
 )
 

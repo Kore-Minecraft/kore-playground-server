@@ -27,7 +27,7 @@ pluginManagement {
 dependencyResolutionManagement {
     @Suppress("UnstableApiUsage")
     repositories {
-        // Kore playground: local-first so a locally published Kore build wins over the Central release.
+        /** Kore playground: a locally published Kore build wins over the Central release. */
         mavenLocal()
         mavenCentral()
         gradlePluginPortal()

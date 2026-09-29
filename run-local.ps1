@@ -1,7 +1,4 @@
-# Runs the compile backend in the foreground for local playground work. See README-KORE.md.
-#
-# Port 8090, not 8080: that is where the Kobweb dev server lives. The IR cache is kept in the working tree,
-# so the first compile after a fresh checkout costs about a minute and every one after that ~6 s.
+# Serves the compile backend on 8090 (8080 is Kobweb's) with the IR cache in ir-cache/, see README-KORE.md.
 [CmdletBinding()]
 param(
 	[int] $Port = 8090,

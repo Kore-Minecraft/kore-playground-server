@@ -6,8 +6,11 @@ plugins {
     id("base-kotlin-jvm-conventions")
 }
 
-// Kore playground: slim mode keeps only the JVM and JS klibs, the two the compile backend actually serves.
+/** Kore playground: slim mode keeps only the JVM and JS libraries, the two the compile backend serves. */
 val koreSlim = providers.gradleProperty("kore.slim").map(String::toBoolean).getOrElse(false)
+
+/** Kore playground: the Kore release on the compile classpaths, read by `.github/workflows/kore-image.yml`. */
+val koreVersion = "2.14.0-26.2"
 
 val kotlinDependency: Configuration by configurations.creating {
     isTransitive = false
@@ -39,7 +42,7 @@ val koreJvmDependency: Configuration by configurations.creating {
     isCanBeResolved = true
     isCanBeConsumed = false
 
-    // The JVM libraries folder already ships the stdlib and the kotlinx artifacts, at the compiler's own versions.
+    /** The JVM folder already ships the stdlib and kotlinx artifacts at the compiler's own versions. */
     exclude(group = "org.jetbrains.kotlin")
     exclude(group = "org.jetbrains.kotlinx")
 
@@ -92,8 +95,7 @@ val copyDependencies by tasks.creating(Copy::class) {
     into(libJVMFolder)
 }
 
-// Sync, not Copy, so a Kore bump drops the previous jars from the highlight classpath; the folder is shared with
-// copyDependencies, hence everything but Kore's own jars is preserved.
+/** Sync so a Kore bump drops the previous jars, preserving the rest of the folder `copyDependencies` fills. */
 val copyKoreJvmDependencies by tasks.creating(Sync::class) {
     from(koreJvmDependency)
     into(libJVMFolder)
@@ -107,8 +109,7 @@ val copyCompilerPluginDependencies by tasks.creating(Copy::class) {
     into(compilerPluginsForJVMFolder)
 }
 
-// Sync, not Copy: this folder is the JS compile classpath and its contents change with the Kore version,
-// so a leftover klib from an earlier version would sit next to the new one and be compiled against too.
+/** Sync so a Kore bump drops the previous klibs from the JS compile classpath. */
 val copyJSDependencies by tasks.creating(Sync::class) {
     from(kotlinJsDependency)
     into(libJSFolder)
@@ -148,15 +149,11 @@ dependencies {
     kotlinJsDependency(libs.kotlin.stdlib.js)
     kotlinJsDependency(libs.kotlin.dom.api.compat)
 
-    // Kore playground: transitive, so knbt / kotlinx-io / kotlinx-serialization JS klibs come along.
-    kotlinJsDependency("io.github.ayfri.kore:kore:2.14.0-26.2")
-    kotlinJsDependency("io.github.ayfri.kore:oop:2.14.0-26.2")
-    kotlinJsDependency("io.github.ayfri.kore:helpers:2.14.0-26.2")
-
-    // Kore playground: the same libraries as JVM jars, so `/api/compiler/highlight` resolves Kore in ~0.5 s.
-    koreJvmDependency("io.github.ayfri.kore:kore:2.14.0-26.2")
-    koreJvmDependency("io.github.ayfri.kore:oop:2.14.0-26.2")
-    koreJvmDependency("io.github.ayfri.kore:helpers:2.14.0-26.2")
+    /** Kore playground: JS klibs for the compile, with their transitive klibs, and JVM jars for `/highlight`. */
+    for (artifact in listOf("helpers", "kore", "oop")) {
+        kotlinJsDependency("io.github.ayfri.kore:$artifact:$koreVersion")
+        koreJvmDependency("io.github.ayfri.kore:$artifact:$koreVersion")
+    }
 
     kotlinWasmDependency(libs.kotlin.stdlib.wasm.js)
 
