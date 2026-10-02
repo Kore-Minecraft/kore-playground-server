@@ -1,27 +1,13 @@
 import io.github.ayfri.kore.arguments.chatcomponents.textComponent
-import io.github.ayfri.kore.arguments.scores.ScoreboardCriteria
-import io.github.ayfri.kore.arguments.types.literals.allPlayers
-import io.github.ayfri.kore.arguments.types.literals.self
-import io.github.ayfri.kore.commands.scoreboard.scoreboard
-import io.github.ayfri.kore.commands.tellraw
 import io.github.ayfri.kore.dataPack
-import io.github.ayfri.kore.functions.load
+import io.github.ayfri.kore.features.paintingvariant.paintingVariant
+import io.github.ayfri.kore.generated.Textures
 import io.github.ayfri.kore.pack.pack
 
-fun playground() = dataPack("smoke_scoreboard") {
+fun playground() = dataPack("smoke_paintings") {
 	pack { description = textComponent("Smoke: an area no prewarm snippet touches") }
 
-	load("setup") {
-		scoreboard {
-			objectives {
-				add("smoke", ScoreboardCriteria.DUMMY, "Smoke")
-			}
-
-			players {
-				add(self(), "smoke", 1)
-			}
-		}
-
-		tellraw(allPlayers(), textComponent("smoke ready"))
+	paintingVariant("wide_kebab", Textures.Painting.KEBAB, height = 1, width = 2) {
+		title = textComponent("Wide kebab")
 	}
 }
