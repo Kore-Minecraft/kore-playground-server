@@ -12,6 +12,7 @@ import io.github.ayfri.kore.features.predicates.conditions.*
 import io.github.ayfri.kore.features.predicates.providers.constant
 import io.github.ayfri.kore.features.predicates.providers.uniform
 import io.github.ayfri.kore.features.predicates.sub.predicates
+import io.github.ayfri.kore.generated.ContextKeySets
 import io.github.ayfri.kore.generated.Enchantments
 import io.github.ayfri.kore.generated.Items
 import io.github.ayfri.kore.pack.pack
@@ -38,7 +39,7 @@ fun playground() = dataPack("prewarm_loottables") {
 
 		lootTable("blocks/$leafId") {
 			namespace = "minecraft"
-			type = LootTableType.BLOCK
+			type = ContextKeySets.BLOCK
 
 			pool {
 				bonusRolls = constant(0f)
@@ -46,13 +47,13 @@ fun playground() = dataPack("prewarm_loottables") {
 					alternatives {
 						children {
 							item(leaf) {
-								conditions {
+								condition {
 									withSilkTouchShears()
 								}
 							}
 
 							item(sapling) {
-								conditions {
+								condition {
 									survivesExplosion()
 									tableBonus(Enchantments.FORTUNE, 0.05f, 0.0625f, 0.083333f, 0.1f)
 								}
@@ -66,17 +67,17 @@ fun playground() = dataPack("prewarm_loottables") {
 				bonusRolls = constant(0f)
 				entries {
 					item(Items.STICK) {
-						conditions {
+						condition {
 							tableBonus(Enchantments.FORTUNE, 0.02f, 0.022222f, 0.025f, 0.033333f, 0.1f)
 						}
-						functions {
-							setCount(uniform(1f, 2f), false)
+						modifier {
+							setCount(uniform(1, 2), false)
 							explosionDecay()
 						}
 					}
 				}
 
-				conditions {
+				condition {
 					inverted {
 						withSilkTouchShears()
 					}
